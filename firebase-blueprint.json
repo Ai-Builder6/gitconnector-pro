@@ -1,0 +1,66 @@
+{
+  "entities": {
+    "SavedWorkspaceSnapshot": {
+      "title": "SavedWorkspaceSnapshot",
+      "description": "Persisted metadata and extracted schema summary for an imported GitHub repository workspace.",
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique workspace identifier."
+        },
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Firebase Auth UID of the workspace owner."
+        },
+        "repoUrl": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Canonical GitHub repository URL."
+        },
+        "branch": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Cloned git branch name."
+        },
+        "commitShort": {
+          "type": "string",
+          "maxLength": 40,
+          "description": "Abbreviated git commit SHA."
+        },
+        "framework": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Detected application framework."
+        },
+        "modelCount": {
+          "type": "number",
+          "description": "Number of database schema models detected."
+        },
+        "savedAtIso": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "ISO timestamp when snapshot was synced."
+        }
+      },
+      "required": [
+        "workspaceId",
+        "ownerId",
+        "repoUrl",
+        "branch",
+        "framework",
+        "savedAtIso"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/repoforge_workspaces/{workspaceId}": {
+      "schema": "SavedWorkspaceSnapshot",
+      "description": "User-scoped saved repository inspection and schema snapshots."
+    }
+  }
+}

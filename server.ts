@@ -1,1985 +1,2838 @@
-import "dotenv/config";
-import express from "express";
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
-import { createServer as createViteServer } from "vite";
-import { GoogleGenAI, Type } from "@google/genai";
-import JSZip from "jszip";
+import express from 'express';
+import type { Request, Response, NextFunction } from 'express';
+import { createServer as createViteServer } from 'vite';
+import { spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
+import net from 'node:net';
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import * as esbuild from 'esbuild';
+import dotenv from 'dotenv';
+import type {
+  ApiServerState,
+  BuildArtifact,
+  DatabaseSchemaSummary,
+  DependencyItem,
+  DetectedSchemaField,
+  DetectedSchemaModel,
+  DiffFileChange,
+  EnvVarItem,
+  FileEntry,
+  GitHubBranchItem,
+  GitHubPullRequestItem,
+  GitHubRepoItem,
+  GitHubUser,
+  LanguageStat,
+  NormalizationAction,
+  SmokeProbeCheck,
+  SmokeProbeReport,
+  SubProjectInfo,
+  WorkspaceDetail,
+  WorkspaceDiffReport,
+  WorkspaceSummary,
+} from './src/types.ts';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+dotenv.config();
 
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-  httpOptions: {
-    headers: {
-      "User-Agent": "aistudio-build",
-    },
-  },
-});
+const PORT = 3000;
+const WORKSPACES_ROOT = '/tmp/repoforge-workspaces';
 
-const app = express();
-app.use(express.json({ limit: "15mb" }));
-
-// In-memory store for OAuth tokens connected during session
-let connectedGoogleAdsSession: {
-  accessToken: string | null;
-  refreshToken?: string | null;
-  connectedAt?: string | null;
-  email?: string | null;
-} = {
-  accessToken: null,
-  refreshToken: null,
-  connectedAt: null,
-  email: null,
-};
-
-// Endpoint 1: Generate a complete Google Ads Responsive Search Ad (RSA) campaign
-app.post("/api/rsa/generate", async (req, res) => {
-  try {
-    const {
-      serviceType = "Move-Out & Deep Cleaning",
-      location = "Edmonton & South Edmonton",
-      promoOffer = "Call 587-742-2500 or Book Online at app.tidyupscleaning.com/booking",
-      targetKeywords = [
-        "move out cleaning edmonton",
-        "deep cleaning edmonton",
-        "end of tenancy cleaning edmonton",
-        "professional house cleaning edmonton",
-      ],
-      negativeKeywords = [],
-      brandTone = "Trustworthy, Warm & Action-Oriented",
-      finalUrl = "https://app.tidyupscleaning.com/booking",
-      phoneNumber = "587-742-2500",
-      pinBrandOrCta = false,
-    } = req.body || {};
-
-    const keywordList = Array.isArray(targetKeywords)
-      ? targetKeywords.join(", ")
-      : String(targetKeywords);
-
-    const prompt = `You are a Senior Google Ads Search Architect and Direct-Response Copywriter creating a high-converting Google Ads Responsive Search Ad (RSA) for "TidyUps Cleaning" (Edmonton, AB).
-Customer Booking App Final URL: ${finalUrl}
-Business Phone Number: ${phoneNumber}
-Service Focus: ${serviceType}
-Target Location / Service Area: ${location}
-Promotional Offer / Value Prop: ${promoOffer}
-Target Search Keywords: ${keywordList}
-Brand Tone: ${brandTone}
-Pinning Preference: ${
-      pinBrandOrCta
-        ? "Pin 1 primary service/brand headline to HEADLINE_1 and 1 direct booking CTA headline to HEADLINE_2; leave all others UNSPECIFIED."
-        : "Leave all headlines and descriptions as UNSPECIFIED (unpinned) to maximize Google Ads machine learning combinations."
-    }
-
-STRICT CONSTRAINTS:
-1. Generate between 12 and 15 distinct Headlines. EVERY headline MUST be 30 characters or fewer (including spaces and punctuation). Count characters carefully! Never exceed 30 characters.
-2. Diversify headline angles across:
-   - "Keyword" (naturally incorporates Edmonton move-out & deep cleaning search terms)
-   - "Booking CTA" (drives immediate booking or quote, e.g., "Get Your Move-Out Quote", "Book Deep Cleaning Today", "Call 587-742-2500 Today")
-   - "Trust" (thorough kitchen, bath, baseboards, satisfaction guaranteed)
-   - "Offer" (transparent pricing, stress-free moving & deep clean)
-   - "Location" (Edmonton & South Edmonton relevance)
-3. Generate EXACTLY 5 distinct Descriptions. EVERY description MUST be 90 characters or fewer (including spaces and punctuation). Count characters carefully! Never exceed 90 characters. Include at least one description referencing ${phoneNumber} or getting a quote today.
-4. Generate path1 (max 15 characters, URL-safe lowercase slug like "edmonton" or "move-out") and path2 (max 15 characters, URL-safe lowercase slug like "deep-clean" or "booking").
-5. Generate 4 Sitelink Extensions (linkText <= 25 chars, description1 <= 35 chars, description2 <= 35 chars) and 4 Callout Extensions (<= 25 chars each).`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
-      contents: prompt,
-      config: {
-        systemInstruction:
-          "You are an expert Google Ads API engineer and PPC specialist for TidyUps Cleaning. You strictly obey character limits: Headlines <= 30 characters, Descriptions <= 90 characters (always provide 5 descriptions <= 90 chars), Path1 <= 15 characters, Path2 <= 15 characters.",
-        temperature: 0.7,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            campaignName: { type: Type.STRING },
-            adGroupName: { type: Type.STRING },
-            path1: { type: Type.STRING },
-            path2: { type: Type.STRING },
-            headlines: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  text: { type: Type.STRING },
-                  pinnedField: { type: Type.STRING },
-                  category: { type: Type.STRING },
-                },
-                required: ["text", "pinnedField", "category"],
-              },
-            },
-            descriptions: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  text: { type: Type.STRING },
-                  pinnedField: { type: Type.STRING },
-                  angle: { type: Type.STRING },
-                },
-                required: ["text", "pinnedField", "angle"],
-              },
-            },
-            sitelinks: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  linkText: { type: Type.STRING },
-                  description1: { type: Type.STRING },
-                  description2: { type: Type.STRING },
-                  finalUrl: { type: Type.STRING },
-                },
-                required: ["linkText", "description1", "description2", "finalUrl"],
-              },
-            },
-            callouts: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-            },
-            strategySummary: { type: Type.STRING },
-          },
-          required: [
-            "campaignName",
-            "adGroupName",
-            "path1",
-            "path2",
-            "headlines",
-            "descriptions",
-            "sitelinks",
-            "callouts",
-            "strategySummary",
-          ],
-        },
-      },
-    });
-
-    const rawText = response.text;
-    if (!rawText) {
-      throw new Error("Empty response from Gemini model.");
-    }
-
-    const parsed = JSON.parse(rawText.trim());
-    res.json({
-      ...parsed,
-      negativeKeywords,
-    });
-  } catch (error: any) {
-    console.error("Error in /api/rsa/generate:", error);
-    res.status(500).json({
-      error:
-        error?.message ||
-        "Failed to generate Responsive Search Ad assets. Please try again.",
-    });
-  }
-});
-
-// Endpoint 2: Smart Paste & Sort Dump Pad
-app.post("/api/rsa/parse-and-sort", async (req, res) => {
-  try {
-    const {
-      rawInput = "",
-      finalUrl = "https://app.tidyupscleaning.com/booking",
-      phoneNumber = "587-742-2500",
-    } = req.body || {};
-
-    const prompt = `You are a Google Ads Search Architect for "TidyUps Cleaning" (Edmonton, AB | Booking URL: ${finalUrl} | Phone: ${phoneNumber}).
-The user pasted a raw dump of keywords, negative keywords, and ad descriptions below.
-
-RAW USER PASTE:
-"""
-${rawInput}
-"""
-
-YOUR TASK:
-1. Extract and clean all POSITIVE search keywords. Group them into 2 or 3 tightly themed Ad Group clusters (for example: "Move-Out & End of Tenancy Edmonton", "Deep House & Apartment Cleaning Edmonton", etc.).
-2. Extract and clean all NEGATIVE keywords and organize them into logical negative keyword categories (e.g., "Jobs & Employment", "DIY & Training", "Supplies & Equipment", "Unrelated Cleaning Services").
-3. Extract any user-provided descriptions AND/OR generate/polish so there are EXACTLY 5 high-converting Descriptions for TidyUps Cleaning, each STRICTLY 90 characters or fewer (<= 90 characters including spaces and punctuation). Preserve the user's pasted descriptions if they are <= 90 characters!
-4. Generate a primary Responsive Search Ad with 14 Headlines (each STRICTLY <= 30 characters) that match the user's pasted positive keywords, location (Edmonton / South Edmonton), and TidyUps Cleaning value propositions, plus path1 (<= 15 chars) and path2 (<= 15 chars).`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
-      contents: prompt,
-      config: {
-        systemInstruction:
-          "You parse messy PPC keyword/copy dumps and organize them into structured Google Ads campaigns. Every headline MUST be <= 30 characters. Every description MUST be <= 90 characters (always output 5 descriptions).",
-        temperature: 0.4,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            campaignName: { type: Type.STRING },
-            adGroupName: { type: Type.STRING },
-            detectedLocation: { type: Type.STRING },
-            detectedPhone: { type: Type.STRING },
-            path1: { type: Type.STRING },
-            path2: { type: Type.STRING },
-            positiveKeywords: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-            },
-            keywordClusters: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  clusterName: { type: Type.STRING },
-                  suggestedPath1: { type: Type.STRING },
-                  suggestedPath2: { type: Type.STRING },
-                  keywords: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING },
-                  },
-                },
-                required: [
-                  "clusterName",
-                  "suggestedPath1",
-                  "suggestedPath2",
-                  "keywords",
-                ],
-              },
-            },
-            negativeKeywords: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-            },
-            negativeCategories: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  categoryName: { type: Type.STRING },
-                  terms: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING },
-                  },
-                },
-                required: ["categoryName", "terms"],
-              },
-            },
-            headlines: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  text: { type: Type.STRING },
-                  pinnedField: { type: Type.STRING },
-                  category: { type: Type.STRING },
-                },
-                required: ["text", "pinnedField", "category"],
-              },
-            },
-            descriptions: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  text: { type: Type.STRING },
-                  pinnedField: { type: Type.STRING },
-                  angle: { type: Type.STRING },
-                },
-                required: ["text", "pinnedField", "angle"],
-              },
-            },
-            strategySummary: { type: Type.STRING },
-          },
-          required: [
-            "campaignName",
-            "adGroupName",
-            "detectedLocation",
-            "detectedPhone",
-            "path1",
-            "path2",
-            "positiveKeywords",
-            "keywordClusters",
-            "negativeKeywords",
-            "negativeCategories",
-            "headlines",
-            "descriptions",
-            "strategySummary",
-          ],
-        },
-      },
-    });
-
-    const rawText = response.text;
-    if (!rawText) {
-      throw new Error("Empty response from Gemini model.");
-    }
-    const parsed = JSON.parse(rawText.trim());
-    res.json(parsed);
-  } catch (error: any) {
-    console.error("Error in /api/rsa/parse-and-sort:", error);
-    res.status(500).json({
-      error:
-        error?.message ||
-        "Failed to parse and sort raw input with AI. Using instant local sorter.",
-    });
-  }
-});
-
-// Endpoint 3: Trim or rewrite a single headline (<=30 chars) or description (<=90 chars)
-app.post("/api/rsa/trim", async (req, res) => {
-  try {
-    const {
-      text = "",
-      assetType = "headline",
-      serviceContext = "TidyUps Cleaning Edmonton move-out and deep cleaning",
-    } = req.body || {};
-
-    const maxChars = assetType === "description" ? 90 : 30;
-
-    const prompt = `Rewrite and tighten the following Google Ads ${assetType} for "TidyUps Cleaning" (${serviceContext}) so that it is STRICTLY ${maxChars} characters or fewer (including all spaces and punctuation).
-Original text (${text.length} chars): "${text}"
-
-Provide 3 punchy, high-converting alternatives that each have <= ${maxChars} characters.`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
-      contents: prompt,
-      config: {
-        systemInstruction: `You are a precision Google Ads copywriter. Every returned candidate MUST be ${maxChars} characters or fewer.`,
-        temperature: 0.6,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            alternatives: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.STRING,
-              },
-            },
-          },
-          required: ["alternatives"],
-        },
-      },
-    });
-
-    const rawText = response.text;
-    if (!rawText) {
-      throw new Error("Empty response from Gemini model.");
-    }
-    const parsed = JSON.parse(rawText.trim());
-    res.json(parsed);
-  } catch (error: any) {
-    console.error("Error in /api/rsa/trim:", error);
-    res.status(500).json({
-      error: error?.message || "Failed to rewrite asset within character limit.",
-    });
-  }
-});
-
-// Endpoint 4: Generate additional targeted assets for a specific angle
-app.post("/api/rsa/expand-angle", async (req, res) => {
-  try {
-    const {
-      assetType = "headline",
-      angle = "Booking CTA",
-      serviceType = "Move-Out & Deep Cleaning",
-      location = "Edmonton",
-      existingTexts = [],
-    } = req.body || {};
-
-    const maxChars = assetType === "description" ? 90 : 30;
-    const count = assetType === "description" ? 2 : 3;
-
-    const prompt = `Generate ${count} NEW, distinct Google Ads RSA ${assetType}s for "TidyUps Cleaning" (Final URL: https://app.tidyupscleaning.com/booking | Phone: 587-742-2500).
-Focus Angle: ${angle}
-Service: ${serviceType}
-Location: ${location}
-Do NOT duplicate these existing assets: ${JSON.stringify(existingTexts)}
-
-STRICT RULE: Every ${assetType} MUST be ${maxChars} characters or fewer (including spaces).`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
-      contents: prompt,
-      config: {
-        systemInstruction: `You generate Google Ads RSA ${assetType}s that are strictly <= ${maxChars} characters.`,
-        temperature: 0.75,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            items: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  text: { type: Type.STRING },
-                  category: { type: Type.STRING },
-                },
-                required: ["text", "category"],
-              },
-            },
-          },
-          required: ["items"],
-        },
-      },
-    });
-
-    const rawText = response.text;
-    if (!rawText) {
-      throw new Error("Empty response from Gemini model.");
-    }
-    const parsed = JSON.parse(rawText.trim());
-    res.json(parsed);
-  } catch (error: any) {
-    console.error("Error in /api/rsa/expand-angle:", error);
-    res.status(500).json({
-      error: error?.message || "Failed to generate additional assets.",
-    });
-  }
-});
-
-// Endpoint 5: AI Cleaning & Home Interior Image Generator (gemini-3.1-flash-lite-image)
-app.post("/api/images/generate", async (req, res) => {
-  try {
-    const {
-      prompt = "Spotless modern Edmonton home kitchen after a professional deep clean, gleaming quartz countertops, stainless steel appliances, bright natural daylight, commercial architectural photography",
-      aspectRatio = "1:1",
-    } = req.body || {};
-
-    const supportedRatios = ["1:1", "3:4", "4:3", "9:16", "16:9"];
-    const validRatio = supportedRatios.includes(aspectRatio)
-      ? aspectRatio
-      : "1:1";
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3.1-flash-lite-image",
-      contents: {
-        parts: [
-          {
-            text: prompt,
-          },
-        ],
-      },
-      config: {
-        imageConfig: {
-          aspectRatio: validRatio,
-        },
-      },
-    });
-
-    let imageUrl: string | null = null;
-    let captionText = "";
-
-    const parts = response.candidates?.[0]?.content?.parts || [];
-    for (const part of parts) {
-      if (part.inlineData?.data) {
-        const mime = part.inlineData.mimeType || "image/png";
-        imageUrl = `data:${mime};base64,${part.inlineData.data}`;
-      } else if (part.text) {
-        captionText += part.text;
-      }
-    }
-
-    if (!imageUrl) {
-      throw new Error("No image data returned from Gemini image model.");
-    }
-
-    res.json({
-      imageUrl,
-      captionText,
-      aspectRatio: validRatio,
-    });
-  } catch (error: any) {
-    console.error("Error in /api/images/generate:", error);
-    res.status(500).json({
-      error:
-        error?.message ||
-        "Failed to generate cleaning image. Please try again.",
-    });
-  }
-});
-
-// Endpoint 6: AI Image Editing for Cleaning Photos (gemini-3.1-flash-lite-image)
-app.post("/api/images/edit", async (req, res) => {
-  try {
-    const {
-      imageDataUrl = "",
-      editPrompt = "Make the room brighter with warm morning sunlight and extra sparkle on the floors",
-      aspectRatio = "1:1",
-    } = req.body || {};
-
-    const match = imageDataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
-    if (!match) {
-      return res.status(400).json({
-        error: "Valid base64 image data URL is required for editing.",
-      });
-    }
-
-    const mimeType = match[1];
-    const base64Data = match[2];
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3.1-flash-lite-image",
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              data: base64Data,
-              mimeType,
-            },
-          },
-          {
-            text: editPrompt,
-          },
-        ],
-      },
-      config: {
-        imageConfig: {
-          aspectRatio: ["1:1", "3:4", "4:3", "9:16", "16:9"].includes(aspectRatio)
-            ? aspectRatio
-            : "1:1",
-        },
-      },
-    });
-
-    let editedImageUrl: string | null = null;
-    const parts = response.candidates?.[0]?.content?.parts || [];
-    for (const part of parts) {
-      if (part.inlineData?.data) {
-        const outMime = part.inlineData.mimeType || "image/png";
-        editedImageUrl = `data:${outMime};base64,${part.inlineData.data}`;
-      }
-    }
-
-    if (!editedImageUrl) {
-      throw new Error("Model did not return an edited image.");
-    }
-
-    res.json({ imageUrl: editedImageUrl });
-  } catch (error: any) {
-    console.error("Error in /api/images/edit:", error);
-    res.status(500).json({
-      error: error?.message || "Failed to edit image.",
-    });
-  }
-});
-
-// Endpoint 7: Google Ads OAuth 2.0 Popup Flow & Connection Status
-function getRedirectUri(req: express.Request): string {
-  const baseUrl =
-    process.env.APP_URL?.replace(/\/$/, "") ||
-    `${req.protocol}://${req.get("host")}`;
-  return `${baseUrl}/auth/callback`;
+interface InternalWorkspace extends WorkspaceDetail {
+  rootDir: string;
+  repoDir: string;
+  outputDir?: string;
 }
 
-app.get("/api/google-ads/status", (_req, res) => {
-  res.json({
-    oauthConfigured: Boolean(
-      process.env.GOOGLE_ADS_CLIENT_ID && process.env.GOOGLE_ADS_CLIENT_SECRET
-    ),
-    developerTokenConfigured: Boolean(process.env.GOOGLE_ADS_DEVELOPER_TOKEN),
-    connected: Boolean(connectedGoogleAdsSession.accessToken),
-    connectedAt: connectedGoogleAdsSession.connectedAt,
-  });
-});
+interface GitHubSession {
+  sessionId: string;
+  token: string;
+  user: GitHubUser;
+  createdAt: number;
+}
 
-app.get("/api/google-ads/auth-url", (req, res) => {
-  const clientId = process.env.GOOGLE_ADS_CLIENT_ID;
-  const redirectUri = getRedirectUri(req);
+const workspaces = new Map<string, InternalWorkspace>();
+const sseClients = new Map<string, Set<Response>>();
+const apiProcesses = new Map<string, ChildProcess>();
+const githubSessions = new Map<string, GitHubSession>();
+const pendingOAuthStates = new Map<string, { redirectUri: string; createdAt: number }>();
+let lastActivePreviewId: string | null = null;
 
-  if (!clientId) {
-    return res.status(400).json({
-      error:
-        "GOOGLE_ADS_CLIENT_ID is not set in environment secrets yet. You can still use Token Connect or Dry-Run Launch Mode, or add GOOGLE_ADS_CLIENT_ID & GOOGLE_ADS_CLIENT_SECRET in Settings > Secrets.",
-      redirectUri,
-    });
-  }
+function ensureWorkspacesRoot() {
+  fs.mkdirSync(WORKSPACES_ROOT, { recursive: true });
+}
 
-  const params = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: redirectUri,
-    response_type: "code",
-    scope: "https://www.googleapis.com/auth/adwords",
-    access_type: "offline",
-    prompt: "consent",
-  });
-
-  const url = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
-  res.json({ url, redirectUri });
-});
-
-const oauthCallbackHandler = async (
-  req: express.Request,
-  res: express.Response
-) => {
-  const { code, error } = req.query;
-  if (error || !code) {
-    return res.send(`
-      <html>
-        <body style="font-family: sans-serif; padding: 24px;">
-          <h3>Google Ads Authorization Cancelled</h3>
-          <p>${String(error || "No authorization code returned.")}</p>
-          <script>
-            setTimeout(() => window.close(), 2000);
-          </script>
-        </body>
-      </html>
-    `);
-  }
-
-  try {
-    const redirectUri = getRedirectUri(req);
-    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        code: String(code),
-        client_id: process.env.GOOGLE_ADS_CLIENT_ID || "",
-        client_secret: process.env.GOOGLE_ADS_CLIENT_SECRET || "",
-        redirect_uri: redirectUri,
-        grant_type: "authorization_code",
-      }),
-    });
-
-    const tokenData = await tokenRes.json();
-    if (tokenData.access_token) {
-      connectedGoogleAdsSession = {
-        accessToken: tokenData.access_token,
-        refreshToken: tokenData.refresh_token || null,
-        connectedAt: new Date().toISOString(),
-      };
+function parseCookies(cookieHeader?: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!cookieHeader) return out;
+  for (const part of cookieHeader.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq > 0) {
+      const k = part.slice(0, eq).trim();
+      const v = decodeURIComponent(part.slice(eq + 1).trim());
+      out[k] = v;
     }
+  }
+  return out;
+}
 
-    res.send(`
-      <html>
-        <body style="font-family: sans-serif; padding: 24px;">
-          <script>
-            if (window.opener) {
-              window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, '*');
-              window.close();
-            } else {
-              window.location.href = '/';
+function getGitHubSession(req: Request): GitHubSession | null {
+  const headerSid = req.headers['x-rf-session'];
+  if (typeof headerSid === 'string' && githubSessions.has(headerSid)) {
+    return githubSessions.get(headerSid) || null;
+  }
+  const cookies = parseCookies(req.headers.cookie);
+  if (cookies.rf_gh_session && githubSessions.has(cookies.rf_gh_session)) {
+    return githubSessions.get(cookies.rf_gh_session) || null;
+  }
+  return null;
+}
+
+function resolveCallbackUrl(clientOrigin?: string): string {
+  if (
+    clientOrigin &&
+    (clientOrigin.endsWith('.run.app') || clientOrigin.startsWith('http://localhost:'))
+  ) {
+    return `${clientOrigin.replace(/\/+$/, '')}/auth/callback`;
+  }
+  const appUrl = (process.env.APP_URL || `http://localhost:${PORT}`).replace(/\/+$/, '');
+  return `${appUrl}/auth/callback`;
+}
+
+function broadcastLog(workspaceId: string, line: string) {
+  const ws = workspaces.get(workspaceId);
+  if (!ws) return;
+  const timestamp = new Date().toISOString().slice(11, 19);
+  const formatted = `[${timestamp}] ${line}`;
+  ws.logs.push(formatted);
+  if (ws.logs.length > 1500) {
+    ws.logs.splice(0, ws.logs.length - 1500);
+  }
+
+  const clients = sseClients.get(workspaceId);
+  if (clients) {
+    const payload = JSON.stringify({ type: 'log', line: formatted, status: ws.status });
+    for (const res of clients) {
+      res.write(`data: ${payload}\n\n`);
+    }
+  }
+}
+
+function broadcastApiLog(workspaceId: string, line: string) {
+  const ws = workspaces.get(workspaceId);
+  if (!ws) return;
+  const timestamp = new Date().toISOString().slice(11, 19);
+  const formatted = `[${timestamp}] ${line}`;
+  ws.apiServer.logs.push(formatted);
+  if (ws.apiServer.logs.length > 600) {
+    ws.apiServer.logs.splice(0, ws.apiServer.logs.length - 600);
+  }
+  const clients = sseClients.get(workspaceId);
+  if (clients) {
+    const payload = JSON.stringify({
+      type: 'api-log',
+      line: formatted,
+      apiServer: ws.apiServer,
+    });
+    for (const res of clients) {
+      res.write(`data: ${payload}\n\n`);
+    }
+  }
+}
+
+function broadcastStatus(workspaceId: string) {
+  const ws = workspaces.get(workspaceId);
+  if (!ws) return;
+  const clients = sseClients.get(workspaceId);
+  if (clients) {
+    const payload = JSON.stringify({
+      type: 'status',
+      status: ws.status,
+      previewUrl: ws.previewUrl,
+      buildDurationMs: ws.buildDurationMs,
+      errorMessage: ws.errorMessage,
+      smokeProbe: ws.smokeProbe,
+      apiServer: ws.apiServer,
+    });
+    for (const res of clients) {
+      res.write(`data: ${payload}\n\n`);
+    }
+  }
+}
+
+async function saveWorkspaceMeta(ws: InternalWorkspace) {
+  try {
+    const metaPath = path.join(ws.rootDir, 'workspace-meta.json');
+    await fsp.writeFile(metaPath, JSON.stringify(ws, null, 2), 'utf-8');
+  } catch {
+    // Ignore transient /tmp errors
+  }
+}
+
+async function rehydrateWorkspaces() {
+  ensureWorkspacesRoot();
+  try {
+    const entries = await fsp.readdir(WORKSPACES_ROOT, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const metaPath = path.join(WORKSPACES_ROOT, entry.name, 'workspace-meta.json');
+      if (fs.existsSync(metaPath)) {
+        try {
+          const raw = await fsp.readFile(metaPath, 'utf-8');
+          const parsed = JSON.parse(raw) as InternalWorkspace;
+          if (parsed && parsed.id && fs.existsSync(parsed.repoDir)) {
+            if (parsed.status === 'building' || parsed.status === 'cloning') {
+              parsed.status = 'ready';
             }
-          </script>
-          <p>Google Ads account connected successfully. This window will close automatically.</p>
-        </body>
-      </html>
-    `);
-  } catch (err: any) {
-    res.send(`
-      <html>
-        <body style="font-family: sans-serif; padding: 24px;">
-          <p>Failed to exchange OAuth code: ${err?.message || "Unknown error"}</p>
-        </body>
-      </html>
-    `);
-  }
-};
-
-app.get(["/auth/callback", "/auth/callback/"], oauthCallbackHandler);
-
-// Endpoint 7b: List Accessible Google Ads Customer Accounts using OAuth Bearer token
-app.post("/api/google-ads/accessible-customers", async (req, res) => {
-  try {
-    const authHeader = req.headers.authorization || "";
-    const bearerToken = authHeader.startsWith("Bearer ")
-      ? authHeader.slice(7).trim()
-      : "";
-    const { developerToken = "" } = req.body || {};
-
-    const effectiveToken =
-      bearerToken || connectedGoogleAdsSession.accessToken || "";
-    const effectiveDevToken =
-      developerToken.trim() || process.env.GOOGLE_ADS_DEVELOPER_TOKEN || "";
-
-    if (!effectiveToken) {
-      return res.status(401).json({
-        error: "Please sign in with Google first to list your Google Ads accounts.",
-      });
-    }
-
-    if (!effectiveDevToken) {
-      return res.status(400).json({
-        error:
-          "Google Ads API requires a Developer Token (from Google Ads > Tools & Settings > Setup > API Center) to query customer accounts.",
-      });
-    }
-
-    const response = await fetch(
-      "https://googleads.googleapis.com/v18/customers:listAccessibleCustomers",
-      {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${effectiveToken}`,
-          "developer-token": effectiveDevToken,
-        },
-      }
-    );
-
-    const data = await response.json();
-    if (!response.ok) {
-      return res.status(response.status).json({
-        error:
-          data?.error?.message ||
-          `Google Ads API returned ${response.status}`,
-        details: data,
-      });
-    }
-
-    // resourceNames looks like ["customers/1234567890", ...]
-    res.json({
-      resourceNames: data.resourceNames || [],
-    });
-  } catch (error: any) {
-    res.status(500).json({
-      error: error?.message || "Failed to list accessible Google Ads customers.",
-    });
-  }
-});
-
-// Endpoint 8: Execute Atomic Google Ads Campaign + Budget + Keywords + RSA Launch
-app.post("/api/google-ads/launch", async (req, res) => {
-  try {
-    const authHeader = req.headers.authorization || "";
-    const headerBearer = authHeader.startsWith("Bearer ")
-      ? authHeader.slice(7).trim()
-      : "";
-
-    const {
-      customerId = "1234567890",
-      loginCustomerId = "",
-      accessToken = "",
-      developerToken = "",
-      mode = "simulate", // "live" | "validate_only" | "simulate"
-      mutatePayload,
-    } = req.body || {};
-
-    const cleanCustomerId = String(customerId).replace(/-/g, "").trim();
-    const effectiveAccessToken =
-      headerBearer ||
-      accessToken.trim() ||
-      connectedGoogleAdsSession.accessToken ||
-      "";
-    const effectiveDeveloperToken =
-      developerToken.trim() || process.env.GOOGLE_ADS_DEVELOPER_TOKEN || "";
-    const effectiveLoginCustomerId =
-      loginCustomerId.replace(/-/g, "").trim() ||
-      (process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID || "").replace(/-/g, "").trim();
-
-    if (!mutatePayload || !Array.isArray(mutatePayload.mutateOperations)) {
-      return res.status(400).json({
-        error: "Missing valid mutateOperations payload.",
-      });
-    }
-
-    const opsCount = mutatePayload.mutateOperations.length;
-
-    const buildReceipt = () => {
-      const budgetOp = mutatePayload.mutateOperations.find(
-        (o: any) => o.campaignBudgetOperation
-      );
-      const campaignOp = mutatePayload.mutateOperations.find(
-        (o: any) => o.campaignOperation
-      );
-      const adGroupOps = mutatePayload.mutateOperations.filter(
-        (o: any) => o.adGroupOperation
-      );
-      const negativeOps = mutatePayload.mutateOperations.filter(
-        (o: any) => o.campaignCriterionOperation
-      );
-      const keywordOps = mutatePayload.mutateOperations.filter(
-        (o: any) => o.adGroupCriterionOperation
-      );
-      const adOps = mutatePayload.mutateOperations.filter(
-        (o: any) => o.adGroupAdOperation
-      );
-
-      const budgetMicros =
-        budgetOp?.campaignBudgetOperation?.create?.amountMicros || 25000000;
-
-      return {
-        budgetResource: `customers/${cleanCustomerId}/campaignBudgets/${Math.floor(
-          100000000 + Math.random() * 900000000
-        )}`,
-        dailyBudgetCad: (Number(budgetMicros) / 1_000_000).toFixed(2),
-        campaignResource: `customers/${cleanCustomerId}/campaigns/${Math.floor(
-          100000000 + Math.random() * 900000000
-        )}`,
-        campaignStatus:
-          campaignOp?.campaignOperation?.create?.status || "PAUSED",
-        adGroupsCreated: adGroupOps.length,
-        positiveKeywordsAttached: keywordOps.length,
-        negativeKeywordsAttached: negativeOps.length,
-        responsiveSearchAdsCreated: adOps.length,
-      };
-    };
-
-    if (
-      (mode === "live" || mode === "validate_only") &&
-      effectiveAccessToken &&
-      effectiveDeveloperToken
-    ) {
-      const endpoint = `https://googleads.googleapis.com/v18/customers/${cleanCustomerId}/googleAds:mutate`;
-      const headers: Record<string, string> = {
-        Authorization: `Bearer ${effectiveAccessToken}`,
-        "developer-token": effectiveDeveloperToken,
-        "Content-Type": "application/json",
-      };
-      if (effectiveLoginCustomerId) {
-        headers["login-customer-id"] = effectiveLoginCustomerId;
-      }
-
-      const bodyPayload = {
-        mutateOperations: mutatePayload.mutateOperations,
-        validateOnly: mode === "validate_only",
-        partialFailure: false,
-      };
-
-      const googleRes = await fetch(endpoint, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(bodyPayload),
-      });
-
-      const googleData = await googleRes.json();
-      if (!googleRes.ok) {
-        return res.json({
-          mode: "staged_package",
-          success: true,
-          timestamp: new Date().toISOString(),
-          operationsExecuted: opsCount,
-          customerId: cleanCustomerId,
-          apiNotice:
-            googleData?.error?.message ||
-            `Google Ads REST endpoint returned ${googleRes.status}. Your full ${opsCount}-operation campaign package has been staged and verified for instant import.`,
-          receipt: buildReceipt(),
-        });
-      }
-
-      return res.json({
-        mode,
-        success: true,
-        timestamp: new Date().toISOString(),
-        operationsExecuted: opsCount,
-        customerId: cleanCustomerId,
-        googleAdsResponse: googleData,
-        receipt: buildReceipt(),
-      });
-    }
-
-    // If Live/Validate was clicked without a 22-char MCC Developer Token, complete staging & provide instant launch package instead of failing
-    const stagedNotice =
-      mode === "live" && !effectiveDeveloperToken
-        ? "Campaign package compiled & verified! (Note: Direct REST mutation to googleads.googleapis.com requires a 22-character Google Ads MCC Developer Token; your ready-to-import Google Ads Editor CSV & JSON bundle has been auto-generated below)."
-        : undefined;
-
-    res.json({
-      mode: mode === "live" && !effectiveDeveloperToken ? "staged_package" : "simulate",
-      success: true,
-      timestamp: new Date().toISOString(),
-      operationsExecuted: opsCount,
-      customerId: cleanCustomerId,
-      apiNotice: stagedNotice,
-      receipt: buildReceipt(),
-    });
-  } catch (error: any) {
-    console.error("Error in /api/google-ads/launch:", error);
-    res.status(500).json({
-      error: error?.message || "Failed to execute campaign launch pipeline.",
-    });
-  }
-});
-
-// Helper: Recursively collect all project files and build a complete .zip archive
-const IGNORED_DIRS = new Set([
-  "node_modules",
-  "dist",
-  ".git",
-  ".DS_Store",
-  ".vite",
-]);
-
-function collectProjectFiles(
-  dirPath: string,
-  baseDir: string,
-  fileList: { relativePath: string; fullPath: string }[] = []
-) {
-  const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-  for (const entry of entries) {
-    if (IGNORED_DIRS.has(entry.name)) continue;
-    const fullPath = path.join(dirPath, entry.name);
-    const relativePath = path.relative(baseDir, fullPath).replace(/\\/g, "/");
-    if (entry.isDirectory()) {
-      collectProjectFiles(fullPath, baseDir, fileList);
-    } else if (entry.isFile()) {
-      fileList.push({ relativePath, fullPath });
-    }
-  }
-  return fileList;
-}
-
-async function createFullProjectZip(extraFiles?: Record<string, string>): Promise<{
-  buffer: Buffer;
-  filePaths: string[];
-}> {
-  const zip = new JSZip();
-  const projectFiles = collectProjectFiles(__dirname, __dirname);
-  const includedPaths: string[] = [];
-
-  for (const file of projectFiles) {
-    try {
-      const content = fs.readFileSync(file.fullPath);
-      zip.file(file.relativePath, content);
-      includedPaths.push(file.relativePath);
-    } catch {
-      // skip unreadable file
-    }
-  }
-
-  if (extraFiles) {
-    for (const [relPath, textContent] of Object.entries(extraFiles)) {
-      zip.file(relPath, textContent);
-      includedPaths.push(relPath);
-    }
-  }
-
-  const buffer = await zip.generateAsync({
-    type: "nodebuffer",
-    compression: "DEFLATE",
-    compressionOptions: { level: 6 },
-  });
-
-  return { buffer, filePaths: includedPaths };
-}
-
-// Endpoint 9: Download Full Project Zip Locally
-app.post("/api/project/zip-download", async (req, res) => {
-  try {
-    const { extraFiles = {} } = req.body || {};
-    const { buffer, filePaths } = await createFullProjectZip(extraFiles);
-    res.json({
-      fileName: "TidyUps-Cleaning-Google-Ads-Project.zip",
-      sizeBytes: buffer.length,
-      fileCount: filePaths.length,
-      filePaths,
-      base64Zip: buffer.toString("base64"),
-    });
-  } catch (error: any) {
-    console.error("Error in /api/project/zip-download:", error);
-    res.status(500).json({
-      error: error?.message || "Failed to generate project zip archive.",
-    });
-  }
-});
-
-// Helper: Find or create a Google Drive folder and apply a high-visibility folderColorRgb
-async function ensureColoredDriveFolder(
-  accessToken: string,
-  folderName: string,
-  folderColorRgb = "#16a765",
-  parentFolderId?: string
-): Promise<{
-  folderId: string;
-  folderLink: string;
-  createdNew: boolean;
-  folderColorRgb: string;
-}> {
-  const safeName = String(folderName).replace(/'/g, "\\'");
-  let q = `mimeType = 'application/vnd.google-apps.folder' and name = '${safeName}' and trashed = false`;
-  if (parentFolderId) {
-    q += ` and '${parentFolderId}' in parents`;
-  }
-
-  const searchUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
-    q
-  )}&fields=files(id,name,webViewLink,folderColorRgb)&spaces=drive`;
-
-  const searchRes = await fetch(searchUrl, {
-    method: "GET",
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  const searchData = await searchRes.json();
-  if (!searchRes.ok) {
-    throw new Error(
-      searchData?.error?.message ||
-        `Google Drive folder search failed (${searchRes.status}).`
-    );
-  }
-
-  if (Array.isArray(searchData.files) && searchData.files.length > 0) {
-    const existing = searchData.files[0];
-    // Apply/update the vibrant folder color so it stands out in Google Drive
-    try {
-      await fetch(
-        `https://www.googleapis.com/drive/v3/files/${existing.id}?fields=id,folderColorRgb`,
-        {
-          method: "PATCH",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            folderColorRgb,
-          }),
+            if (!parsed.databaseSchema) {
+              parsed.databaseSchema = { detected: false, ormType: 'None', sourceFiles: [], models: [] };
+            }
+            if (!parsed.apiServer) {
+              parsed.apiServer = {
+                capable: false,
+                detectedEntry: null,
+                startCommand: null,
+                status: 'stopped',
+                logs: [],
+              };
+            } else {
+              parsed.apiServer.status = 'stopped';
+            }
+            workspaces.set(parsed.id, parsed);
+          }
+        } catch {
+          // Skip invalid metadata
         }
-      );
-    } catch {
-      // ignore if Drive color patch is unsupported on a shared drive
+      }
     }
+  } catch {
+    // Empty directory
+  }
+}
 
-    return {
-      folderId: existing.id,
-      folderLink:
-        existing.webViewLink ||
-        `https://drive.google.com/drive/folders/${existing.id}`,
-      createdNew: false,
-      folderColorRgb,
-    };
+interface ParsedGitHubTarget {
+  owner: string;
+  repoName: string;
+  cloneUrl: string;
+  canonicalUrl: string;
+  branch?: string;
+  subPath: string;
+}
+
+function parseGitHubInput(
+  rawInput: string,
+  explicitBranch?: string,
+  explicitSubPath?: string
+): ParsedGitHubTarget | null {
+  let cleaned = rawInput.trim();
+  if (!cleaned) return null;
+
+  cleaned = cleaned.replace(/^git\+/, '');
+  if (cleaned.startsWith('git@github.com:')) {
+    cleaned = 'https://github.com/' + cleaned.slice('git@github.com:'.length);
+  } else if (cleaned.startsWith('github.com/')) {
+    cleaned = 'https://' + cleaned;
+  } else if (!cleaned.startsWith('http://') && !cleaned.startsWith('https://')) {
+    cleaned = 'https://github.com/' + cleaned.replace(/^\/+/, '');
   }
 
-  // Create new folder with folderColorRgb
-  const createBody: Record<string, any> = {
-    name: folderName,
-    mimeType: "application/vnd.google-apps.folder",
-    folderColorRgb,
-  };
-  if (parentFolderId) {
-    createBody.parents = [parentFolderId];
+  let urlObj: URL;
+  try {
+    urlObj = new URL(cleaned);
+  } catch {
+    return null;
   }
 
-  const createRes = await fetch(
-    "https://www.googleapis.com/drive/v3/files?fields=id,name,webViewLink,folderColorRgb",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(createBody),
+  if (urlObj.hostname !== 'github.com' && urlObj.hostname !== 'www.github.com') {
+    return null;
+  }
+
+  const segments = urlObj.pathname
+    .replace(/\/+$/, '')
+    .split('/')
+    .filter(Boolean);
+
+  if (segments.length < 2) return null;
+
+  const owner = segments[0];
+  const repoName = segments[1].replace(/\.git$/, '');
+  if (!owner || !repoName) return null;
+
+  let branch = explicitBranch?.trim() || undefined;
+  let subPath = explicitSubPath?.trim().replace(/^\/+|\/+$/g, '') || '';
+
+  if ((segments[2] === 'tree' || segments[2] === 'blob') && segments.length >= 4) {
+    if (!branch) {
+      branch = segments[3];
     }
-  );
-  const created = await createRes.json();
-  if (!createRes.ok || !created.id) {
-    throw new Error(
-      created?.error?.message ||
-        `Could not create '${folderName}' folder in Google Drive.`
-    );
+    if (!subPath && segments.length > 4) {
+      const remainder = segments.slice(4);
+      if (segments[2] === 'blob') {
+        remainder.pop();
+      }
+      subPath = remainder.join('/');
+    }
   }
 
   return {
-    folderId: created.id,
-    folderLink:
-      created.webViewLink ||
-      `https://drive.google.com/drive/folders/${created.id}`,
-    createdNew: true,
-    folderColorRgb,
+    owner,
+    repoName,
+    cloneUrl: `https://github.com/${owner}/${repoName}.git`,
+    canonicalUrl: `https://github.com/${owner}/${repoName}`,
+    branch,
+    subPath,
   };
 }
 
-// Endpoint 10: Auto-Zip Whole Project & Upload to Google Drive "Leads-Creator" Folder (with Colored Folders)
-app.post("/api/drive/upload-project-zip", async (req, res) => {
-  try {
-    const authHeader = req.headers.authorization || "";
-    const accessToken = authHeader.startsWith("Bearer ")
-      ? authHeader.slice(7).trim()
-      : "";
+function runCommandStreaming(
+  cmd: string,
+  args: string[],
+  cwd: string,
+  envOverrides: Record<string, string>,
+  onLine?: (line: string) => void,
+  timeoutMs = 180_000
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, {
+      cwd,
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: '0',
+        CI: 'false',
+        FORCE_COLOR: '0',
+        NO_COLOR: '1',
+        BROWSER: 'none',
+        ...envOverrides,
+      },
+    });
 
-    if (!accessToken) {
-      return res.status(401).json({
-        error:
-          "Please click 'Sign in with Google' first so the app has permission to upload to your Google Drive 'Leads-Creator' folder.",
-      });
-    }
+    let stdout = '';
+    let stderr = '';
+    let stdoutBuf = '';
+    let stderrBuf = '';
+    let settled = false;
 
-    const {
-      folderName = "Leads-Creator",
-      folderColorRgb = "#16a765", // Vibrant Emerald Green by default
-      zipFileName = `TidyUps-Cleaning-Google-Ads-Project-${new Date()
-        .toISOString()
-        .slice(0, 10)}.zip`,
-      extraFiles = {},
-      createColoredSubfolders = true,
-    } = req.body || {};
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        onLine?.(`Command timed out after ${Math.round(timeoutMs / 1000)}s — terminating process.`);
+        child.kill('SIGKILL');
+        resolve({ code: 124, stdout, stderr: stderr + '\nTimed out' });
+      }
+    }, timeoutMs);
 
-    // 1. Generate the full project .zip in memory
-    const { buffer, filePaths } = await createFullProjectZip(extraFiles);
-
-    // 2. Ensure main "Leads-Creator" folder exists & is colored with high-visibility color
-    const mainFolder = await ensureColoredDriveFolder(
-      accessToken,
-      folderName,
-      folderColorRgb
-    );
-
-    // Optional: Ensure color-coded subfolders inside "Leads-Creator" so everything in Drive is visually organized
-    const coloredSubfolders: {
-      name: string;
-      color: string;
-      link: string;
-    }[] = [];
-
-    if (createColoredSubfolders) {
-      const subSpecs = [
-        {
-          name: "01 - Google Sheets Master Command Center",
-          color: "#16a765", // Emerald Green
-        },
-        {
-          name: "02 - Full Project ZIP Backups",
-          color: "#4986e7", // Royal Blue
-        },
-        {
-          name: "03 - Google Ads CSV & JSON Exports",
-          color: "#ffad46", // Amber Gold
-        },
-      ];
-      for (const spec of subSpecs) {
-        try {
-          const sub = await ensureColoredDriveFolder(
-            accessToken,
-            spec.name,
-            spec.color,
-            mainFolder.folderId
-          );
-          coloredSubfolders.push({
-            name: spec.name,
-            color: spec.color,
-            link: sub.folderLink,
-          });
-        } catch {
-          // continue if subfolder creation fails
+    const flushLines = (chunkStr: string, isErr: boolean) => {
+      if (isErr) {
+        stderr += chunkStr;
+        stderrBuf += chunkStr;
+        const lines = stderrBuf.split(/\r?\n/);
+        stderrBuf = lines.pop() ?? '';
+        for (const l of lines) {
+          if (l.trim()) onLine?.(l);
+        }
+      } else {
+        stdout += chunkStr;
+        stdoutBuf += chunkStr;
+        const lines = stdoutBuf.split(/\r?\n/);
+        stdoutBuf = lines.pop() ?? '';
+        for (const l of lines) {
+          if (l.trim()) onLine?.(l);
         }
       }
-    }
-
-    // 3. Upload the .zip archive into the "Leads-Creator" folder using multipart/related
-    const boundary = "-------TidyUpsDriveUploadBoundary" + Date.now();
-    const metadata = {
-      name: zipFileName,
-      parents: [mainFolder.folderId],
-      mimeType: "application/zip",
-      description:
-        "Complete TidyUps Cleaning Google Ads RSA Studio project source code + Edmonton Move-Out & Deep Cleaning campaign exports.",
     };
 
-    const multipartHeader = Buffer.from(
-      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(
-        metadata
-      )}\r\n--${boundary}\r\nContent-Type: application/zip\r\n\r\n`,
-      "utf-8"
-    );
-    const multipartFooter = Buffer.from(`\r\n--${boundary}--`, "utf-8");
-    const multipartBody = Buffer.concat([
-      multipartHeader,
-      buffer,
-      multipartFooter,
-    ]);
+    child.stdout.on('data', (d: Buffer) => flushLines(d.toString('utf-8'), false));
+    child.stderr.on('data', (d: Buffer) => flushLines(d.toString('utf-8'), true));
 
-    const uploadRes = await fetch(
-      "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink,webContentLink,size,createdTime",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": `multipart/related; boundary=${boundary}`,
-          "Content-Length": String(multipartBody.length),
-        },
-        body: multipartBody,
+    child.on('error', (err) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        onLine?.(`Process error: ${err.message}`);
+        resolve({ code: 1, stdout, stderr: err.message });
       }
-    );
-
-    const uploadedFile = await uploadRes.json();
-    if (!uploadRes.ok || !uploadedFile.id) {
-      return res.status(uploadRes.status || 500).json({
-        error:
-          uploadedFile?.error?.message ||
-          "Failed to upload project zip to Google Drive.",
-      });
-    }
-
-    res.json({
-      success: true,
-      fileId: uploadedFile.id,
-      fileName: uploadedFile.name,
-      fileWebViewLink:
-        uploadedFile.webViewLink ||
-        `https://drive.google.com/file/d/${uploadedFile.id}/view`,
-      folderId: mainFolder.folderId,
-      folderName,
-      folderColorRgb: mainFolder.folderColorRgb,
-      folderWebViewLink: mainFolder.folderLink,
-      folderCreatedNew: mainFolder.createdNew,
-      coloredSubfolders,
-      sizeBytes: buffer.length,
-      fileCount: filePaths.length,
-      filePaths,
     });
-  } catch (error: any) {
-    console.error("Error in /api/drive/upload-project-zip:", error);
-    res.status(500).json({
-      error:
-        error?.message ||
-        "Failed to zip and upload project to Google Drive 'Leads-Creator' folder.",
-    });
-  }
-});
 
-// Endpoint 11: Create Color-Coded, Visually Styled Multi-Tab Google Sheet inside "Leads-Creator"
-app.post("/api/sheets/create-master-sheet", async (req, res) => {
-  try {
-    const authHeader = req.headers.authorization || "";
-    const accessToken = authHeader.startsWith("Bearer ")
-      ? authHeader.slice(7).trim()
-      : "";
-
-    if (!accessToken) {
-      return res.status(401).json({
-        error:
-          "Please sign in with Google first so the app can create your styled Google Sheet in Google Drive.",
-      });
-    }
-
-    const {
-      campaign,
-      dailyBudgetCad = 25,
-      biddingStrategy = "MAXIMIZE_CLICKS",
-      maxCpcBidCad = 3.5,
-      keywordMatchType = "PHRASE",
-      folderName = "Leads-Creator",
-      folderColorRgb = "#16a765",
-      sheetTitle = `TidyUps Cleaning — Edmonton Google Ads Master Sheet (${new Date()
-        .toISOString()
-        .slice(0, 10)})`,
-    } = req.body || {};
-
-    if (!campaign) {
-      return res.status(400).json({
-        error: "Campaign data is required to generate the Google Sheet.",
-      });
-    }
-
-    // 1. Ensure main "Leads-Creator" folder exists and is colored
-    const mainFolder = await ensureColoredDriveFolder(
-      accessToken,
-      folderName,
-      folderColorRgb
-    );
-
-    // Also color-code the "01 - Google Sheets Master Command Center" subfolder inside Leads-Creator
-    const sheetsSubfolder = await ensureColoredDriveFolder(
-      accessToken,
-      "01 - Google Sheets Master Command Center",
-      "#16a765",
-      mainFolder.folderId
-    );
-
-    // 2. Create the spreadsheet with 5 color-coded tabs
-    const tab1Title = "1. Campaign & Budget";
-    const tab2Title = "2. RSA Headlines & 5 Descriptions";
-    const tab3Title = "3. Positive Keywords (Edmonton)";
-    const tab4Title = "4. Negative Keywords Shield";
-    const tab5Title = "5. Google Ads Editor Bulk Row";
-
-    const createSheetRes = await fetch(
-      "https://sheets.googleapis.com/v4/spreadsheets",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          properties: {
-            title: sheetTitle,
-          },
-          sheets: [
-            {
-              properties: {
-                sheetId: 101,
-                title: tab1Title,
-                gridProperties: { frozenRowCount: 2, rowCount: 40, columnCount: 6 },
-                tabColor: { red: 0.06, green: 0.46, blue: 0.43 }, // Deep Teal
-              },
-            },
-            {
-              properties: {
-                sheetId: 102,
-                title: tab2Title,
-                gridProperties: { frozenRowCount: 2, rowCount: 50, columnCount: 8 },
-                tabColor: { red: 0.11, green: 0.31, blue: 0.85 }, // Royal Blue
-              },
-            },
-            {
-              properties: {
-                sheetId: 103,
-                title: tab3Title,
-                gridProperties: { frozenRowCount: 2, rowCount: 60, columnCount: 7 },
-                tabColor: { red: 0.08, green: 0.5, blue: 0.24 }, // Emerald Green
-              },
-            },
-            {
-              properties: {
-                sheetId: 104,
-                title: tab4Title,
-                gridProperties: { frozenRowCount: 2, rowCount: 80, columnCount: 6 },
-                tabColor: { red: 0.75, green: 0.07, blue: 0.24 }, // Crimson Rose
-              },
-            },
-            {
-              properties: {
-                sheetId: 105,
-                title: tab5Title,
-                gridProperties: { frozenRowCount: 1, rowCount: 20, columnCount: 48 },
-                tabColor: { red: 0.85, green: 0.47, blue: 0.02 }, // Amber Gold
-              },
-            },
-          ],
-        }),
+    child.on('close', (code) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        if (stdoutBuf.trim()) onLine?.(stdoutBuf.trim());
+        if (stderrBuf.trim()) onLine?.(stderrBuf.trim());
+        resolve({ code: code ?? 0, stdout, stderr });
       }
-    );
-
-    const createdSheet = await createSheetRes.json();
-    if (!createSheetRes.ok || !createdSheet.spreadsheetId) {
-      return res.status(createSheetRes.status || 500).json({
-        error:
-          createdSheet?.error?.message ||
-          "Failed to create Google Sheet. Make sure Google Sheets permission was granted.",
-      });
-    }
-
-    const spreadsheetId: string = createdSheet.spreadsheetId;
-    const spreadsheetUrl: string =
-      createdSheet.spreadsheetUrl ||
-      `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`;
-
-    // 3. Move the spreadsheet into the "Leads-Creator" folder in Google Drive
-    try {
-      const fileMetaRes = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${spreadsheetId}?fields=parents`,
-        {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        }
-      );
-      const fileMeta = await fileMetaRes.json();
-      const previousParents = Array.isArray(fileMeta.parents)
-        ? fileMeta.parents.join(",")
-        : "";
-
-      await fetch(
-        `https://www.googleapis.com/drive/v3/files/${spreadsheetId}?addParents=${mainFolder.folderId}&removeParents=${previousParents}&fields=id,parents`,
-        {
-          method: "PATCH",
-          headers: { Authorization: `Bearer ${accessToken}` },
-        }
-      );
-    } catch {
-      // ignore parent move warning if any
-    }
-
-    // 4. Prepare values for all 5 tabs
-    const monthlyBudgetCad = Math.round(Number(dailyBudgetCad) * 30.4);
-    const headlines: any[] = Array.isArray(campaign.headlines)
-      ? campaign.headlines
-      : [];
-    const descriptions: any[] = Array.isArray(campaign.descriptions)
-      ? campaign.descriptions
-      : [];
-    const positiveKeywords: string[] = Array.isArray(campaign.targetKeywords)
-      ? campaign.targetKeywords
-      : [];
-    const negativeKeywords: string[] = Array.isArray(campaign.negativeKeywords)
-      ? campaign.negativeKeywords
-      : [];
-
-    // Tab 1 Rows: Campaign & Budget Overview
-    const tab1Values = [
-      [
-        "TIDYUPS CLEANING — EDMONTON GOOGLE ADS CAMPAIGN COMMAND CENTER",
-        "",
-        "",
-        "",
-      ],
-      ["Parameter / Configuration", "Active Value", "API Field / Format", "Notes & Status"],
-      ["Business Name", "TidyUps Cleaning", "Advertiser Brand", "Edmonton & South Edmonton, AB"],
-      ["Business Phone Number", campaign.phoneNumber || "587-742-2500", "Call Asset / Copy CTA", "Included in Description #5 & Callouts"],
-      ["Customer Booking App URL", campaign.finalUrl || "https://app.tidyupscleaning.com/booking", "ad.finalUrls[0]", "Primary Conversion Landing Page"],
-      ["Google Tag (gtag.js) ID", "AW-18539302675", "Conversion Tracking Tag", "Active in index.html <head>"],
-      ["Google Ads Customer ID", campaign.customerId || "123-456-7890", "customers/{customerId}", "Switchable to any signed-in account"],
-      ["Campaign Name", campaign.campaignName || "TidyUps Edmonton — Move-Out & Deep Cleaning", "campaign.name", `Initial Status: ${campaign.adStatus || "PAUSED"}`],
-      ["Ad Group Name", campaign.adGroupName || "Move-Out & Deep Cleaning Edmonton", "adGroup.name", "Responsive Search Ad Group"],
-      ["Daily Budget (CAD)", `$${Number(dailyBudgetCad).toFixed(2)} CAD / day`, `${Math.round(Number(dailyBudgetCad) * 1_000_000).toLocaleString()} micros`, `Est. Monthly Max: $${monthlyBudgetCad} CAD/mo`],
-      ["Bidding Strategy", biddingStrategy, "Campaign Bidding", `Max CPC Ceiling: $${Number(maxCpcBidCad).toFixed(2)} CAD`],
-      ["Display URL Paths", `/${campaign.path1 || "edmonton"}/${campaign.path2 || "deep-clean"}`, "path1 (<=15c) / path2 (<=15c)", "Clean keyword-rich display paths"],
-      ["Responsive Search Ad Headlines", `${headlines.length} Headlines`, "3 to 15 Headlines (<=30 chars)", "All headlines verified <= 30 chars"],
-      ["Responsive Search Ad Descriptions", `${descriptions.length} Descriptions`, "Up to 5 Descriptions (<=90 chars)", "All 5 TidyUps descriptions verified <= 90 chars"],
-      ["Positive Target Keywords", `${positiveKeywords.length} Keywords`, `Match Type: ${keywordMatchType}`, "Edmonton Move-Out & Deep Cleaning intent"],
-      ["Negative Keywords Shield", `${negativeKeywords.length} Excluded Terms`, "Campaign Negative Criteria", "Blocks jobs, DIY, supplies, auto/duct/carpet"],
-    ];
-
-    // Tab 2 Rows: RSA Headlines & 5 Descriptions
-    const tab2Values: any[][] = [
-      [
-        "TIDYUPS CLEANING — RESPONSIVE SEARCH AD HEADLINES (<=30 CHARS) & 5 DESCRIPTIONS (<=90 CHARS)",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-      ],
-      [
-        "Asset Type",
-        "Slot #",
-        "Ad Copy Text",
-        "Char Count",
-        "Max Limit",
-        "Chars Left",
-        "Category / Angle & Pinning",
-      ],
-    ];
-
-    headlines.forEach((h, idx) => {
-      const text = String(h.text || "");
-      tab2Values.push([
-        "HEADLINE",
-        `Headline #${idx + 1}`,
-        text,
-        text.length,
-        30,
-        30 - text.length,
-        `${h.category || "Keyword"} (${h.pinnedField || "UNSPECIFIED"})`,
-      ]);
     });
-
-    descriptions.forEach((d, idx) => {
-      const text = String(d.text || "");
-      tab2Values.push([
-        "DESCRIPTION (<=90c)",
-        `Description #${idx + 1}`,
-        text,
-        text.length,
-        90,
-        90 - text.length,
-        `${d.angle || "Value Prop"} (${d.pinnedField || "UNSPECIFIED"})`,
-      ]);
-    });
-
-    // Tab 3 Rows: Positive Keywords (Edmonton)
-    const formatKeywordByMatch = (kw: string, match: string) => {
-      if (match === "EXACT") return `[${kw}]`;
-      if (match === "PHRASE") return `"${kw}"`;
-      return kw;
-    };
-
-    const classifyPositiveCluster = (kw: string) => {
-      const lower = kw.toLowerCase();
-      if (
-        lower.includes("move") ||
-        lower.includes("tenancy") ||
-        lower.includes("rental")
-      ) {
-        return "Move-Out / End of Tenancy Cleaning";
-      }
-      if (lower.includes("deep")) {
-        return "Deep House & Apartment Cleaning";
-      }
-      return "Edmonton Residential Cleaning";
-    };
-
-    const tab3Values: any[][] = [
-      [
-        "POSITIVE TARGET KEYWORDS — EDMONTON MOVE-OUT & DEEP CLEANING",
-        "",
-        "",
-        "",
-        "",
-        "",
-      ],
-      [
-        "Keyword #",
-        "Raw Search Keyword",
-        "Formatted Google Ads Match",
-        "Match Type",
-        "Ad Group Intent Cluster",
-        "Destination Booking URL",
-      ],
-      ...positiveKeywords.map((kw, i) => [
-        `KW-${String(i + 1).padStart(2, "0")}`,
-        kw,
-        formatKeywordByMatch(kw, keywordMatchType),
-        keywordMatchType,
-        classifyPositiveCluster(kw),
-        campaign.finalUrl || "https://app.tidyupscleaning.com/booking",
-      ]),
-    ];
-
-    // Tab 4 Rows: Negative Keywords Shield
-    const classifyNegativeReason = (term: string) => {
-      const t = term.toLowerCase().trim();
-      if (
-        [
-          "jobs",
-          "job",
-          "hiring",
-          "careers",
-          "career",
-          "salary",
-          "wages",
-          "employment",
-          "resume",
-          "indeed",
-        ].includes(t)
-      ) {
-        return "Jobs & Employment Seekers";
-      }
-      if (
-        [
-          "training",
-          "course",
-          "courses",
-          "certification",
-          "how to",
-          "do it yourself",
-          "diy",
-          "free",
-        ].includes(t)
-      ) {
-        return "DIY, Free & Training Queries";
-      }
-      if (
-        [
-          "cleaning supplies",
-          "cleaning products",
-          "cleaning equipment",
-          "equipment rental",
-          "vacuum repair",
-        ].includes(t)
-      ) {
-        return "Supplies, Products & Equipment";
-      }
-      return "Unrelated Services (Auto, Duct, Dental, Commercial)";
-    };
-
-    const tab4Values: any[][] = [
-      [
-        "NEGATIVE KEYWORDS SHIELD — WASTED AD SPEND PROTECTION",
-        "",
-        "",
-        "",
-        "",
-      ],
-      [
-        "Negative #",
-        "Excluded Search Term",
-        "Google Ads Negative Format",
-        "Protection Category",
-        "Status",
-      ],
-      ...negativeKeywords.map((neg, i) => {
-        const clean = String(neg).trim();
-        return [
-          `NEG-${String(i + 1).padStart(2, "0")}`,
-          clean,
-          `"${clean}"`,
-          classifyNegativeReason(clean),
-          "ACTIVE SHIELD",
-        ];
-      }),
-    ];
-
-    // Tab 5 Rows: Google Ads Editor Bulk Row
-    const bulkHeaders = [
-      "Campaign",
-      "Ad Group",
-      "Ad type",
-      "Status",
-      "Final URL",
-      "Path 1",
-      "Path 2",
-    ];
-    for (let i = 1; i <= 15; i++) {
-      bulkHeaders.push(`Headline ${i}`);
-    }
-    for (let i = 1; i <= 5; i++) {
-      bulkHeaders.push(`Description ${i}`);
-    }
-
-    const bulkRow = [
-      campaign.campaignName || "TidyUps Edmonton — Move-Out & Deep Cleaning",
-      campaign.adGroupName || "Move-Out & Deep Cleaning Edmonton",
-      "Responsive search ad",
-      campaign.adStatus === "ENABLED" ? "Enabled" : "Paused",
-      campaign.finalUrl || "https://app.tidyupscleaning.com/booking",
-      campaign.path1 || "edmonton",
-      campaign.path2 || "deep-clean",
-    ];
-    for (let i = 0; i < 15; i++) {
-      bulkRow.push(headlines[i]?.text || "");
-    }
-    for (let i = 0; i < 5; i++) {
-      bulkRow.push(descriptions[i]?.text || "");
-    }
-
-    const tab5Values = [bulkHeaders, bulkRow];
-
-    // 5. Write all values using spreadsheets.values.batchUpdate
-    await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          valueInputOption: "USER_ENTERED",
-          data: [
-            { range: `'${tab1Title}'!A1`, values: tab1Values },
-            { range: `'${tab2Title}'!A1`, values: tab2Values },
-            { range: `'${tab3Title}'!A1`, values: tab3Values },
-            { range: `'${tab4Title}'!A1`, values: tab4Values },
-            { range: `'${tab5Title}'!A1`, values: tab5Values },
-          ],
-        }),
-      }
-    );
-
-    // 6. Apply rich visual styling (Colored Title Banners, Colored Header Rows, Alternating Banding, Auto-Resize)
-    const makeHeaderStyleRequests = (
-      sheetId: number,
-      colCount: number,
-      rowCount: number,
-      bannerColor: { red: number; green: number; blue: number },
-      headerColor: { red: number; green: number; blue: number },
-      lightBandColor: { red: number; green: number; blue: number }
-    ) => [
-      // Row 0: Title Banner
-      {
-        repeatCell: {
-          range: {
-            sheetId,
-            startRowIndex: 0,
-            endRowIndex: 1,
-            startColumnIndex: 0,
-            endColumnIndex: colCount,
-          },
-          cell: {
-            userEnteredFormat: {
-              backgroundColor: bannerColor,
-              textFormat: {
-                foregroundColor: { red: 1, green: 1, blue: 1 },
-                bold: true,
-                fontSize: 12,
-              },
-              verticalAlignment: "MIDDLE",
-            },
-          },
-          fields:
-            "userEnteredFormat(backgroundColor,textFormat,verticalAlignment)",
-        },
-      },
-      // Row 1: Column Headers
-      {
-        repeatCell: {
-          range: {
-            sheetId,
-            startRowIndex: 1,
-            endRowIndex: 2,
-            startColumnIndex: 0,
-            endColumnIndex: colCount,
-          },
-          cell: {
-            userEnteredFormat: {
-              backgroundColor: headerColor,
-              textFormat: {
-                foregroundColor: { red: 1, green: 1, blue: 1 },
-                bold: true,
-                fontSize: 10,
-              },
-              verticalAlignment: "MIDDLE",
-            },
-          },
-          fields:
-            "userEnteredFormat(backgroundColor,textFormat,verticalAlignment)",
-        },
-      },
-      // Alternating row banding for data rows
-      {
-        addBanding: {
-          bandedRange: {
-            range: {
-              sheetId,
-              startRowIndex: 1,
-              endRowIndex: Math.max(3, rowCount),
-              startColumnIndex: 0,
-              endColumnIndex: colCount,
-            },
-            rowProperties: {
-              headerColor,
-              firstBandColor: { red: 1, green: 1, blue: 1 },
-              secondBandColor: lightBandColor,
-            },
-          },
-        },
-      },
-      // Auto-resize columns so everything is clean and readable
-      {
-        autoResizeDimensions: {
-          dimensions: {
-            sheetId,
-            dimension: "COLUMNS",
-            startIndex: 0,
-            endIndex: colCount,
-          },
-        },
-      },
-    ];
-
-    const styleRequests = [
-      // Tab 1: Deep Teal theme
-      ...makeHeaderStyleRequests(
-        101,
-        4,
-        tab1Values.length,
-        { red: 0.04, green: 0.35, blue: 0.33 },
-        { red: 0.06, green: 0.46, blue: 0.43 },
-        { red: 0.94, green: 0.99, blue: 0.98 }
-      ),
-      // Tab 2: Royal Blue theme (Headlines & 5 Descriptions)
-      ...makeHeaderStyleRequests(
-        102,
-        7,
-        tab2Values.length,
-        { red: 0.09, green: 0.23, blue: 0.65 },
-        { red: 0.15, green: 0.39, blue: 0.92 },
-        { red: 0.94, green: 0.96, blue: 1.0 }
-      ),
-      // Tab 3: Emerald Green theme (Positive Keywords)
-      ...makeHeaderStyleRequests(
-        103,
-        6,
-        tab3Values.length,
-        { red: 0.06, green: 0.38, blue: 0.18 },
-        { red: 0.08, green: 0.5, blue: 0.24 },
-        { red: 0.94, green: 0.99, blue: 0.95 }
-      ),
-      // Tab 4: Crimson Rose theme (Negative Keywords)
-      ...makeHeaderStyleRequests(
-        104,
-        5,
-        tab4Values.length,
-        { red: 0.58, green: 0.06, blue: 0.18 },
-        { red: 0.75, green: 0.07, blue: 0.24 },
-        { red: 1.0, green: 0.95, blue: 0.96 }
-      ),
-    ];
-
-    await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          requests: styleRequests,
-        }),
-      }
-    );
-
-    res.json({
-      success: true,
-      spreadsheetId,
-      sheetTitle,
-      spreadsheetUrl,
-      folderName,
-      folderId: mainFolder.folderId,
-      folderColorRgb: mainFolder.folderColorRgb,
-      folderWebViewLink: mainFolder.folderLink,
-      sheetsSubfolderLink: sheetsSubfolder.folderLink,
-      tabsCreated: [
-        tab1Title,
-        tab2Title,
-        tab3Title,
-        tab4Title,
-        tab5Title,
-      ],
-    });
-  } catch (error: any) {
-    console.error("Error in /api/sheets/create-master-sheet:", error);
-    res.status(500).json({
-      error:
-        error?.message ||
-        "Failed to create color-coded Google Sheet in Google Drive.",
-    });
-  }
-});
-
-// Endpoint 12: List User's Existing Google Sheets (Works across any signed-in Google Account)
-app.get("/api/sheets/list-user-sheets", async (req, res) => {
-  try {
-    const authHeader = req.headers.authorization || "";
-    const accessToken = authHeader.startsWith("Bearer ")
-      ? authHeader.slice(7).trim()
-      : "";
-
-    if (!accessToken) {
-      return res.status(401).json({
-        error: "Please sign in with Google to view your Google Sheets.",
-      });
-    }
-
-    const q =
-      "mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false";
-    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
-      q
-    )}&pageSize=20&orderBy=modifiedTime desc&fields=files(id,name,webViewLink,modifiedTime)`;
-
-    const driveRes = await fetch(url, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    const driveData = await driveRes.json();
-    if (!driveRes.ok) {
-      return res.status(driveRes.status).json({
-        error:
-          driveData?.error?.message ||
-          "Could not list Google Sheets from your account.",
-      });
-    }
-
-    res.json({
-      files: driveData.files || [],
-    });
-  } catch (error: any) {
-    res.status(500).json({
-      error: error?.message || "Failed to list Google Sheets.",
-    });
-  }
-});
-
-// Endpoint 13: Import Keywords & Copy from an Existing Google Sheet (Discovers tab names dynamically)
-app.post("/api/sheets/import-from-sheet", async (req, res) => {
-  try {
-    const authHeader = req.headers.authorization || "";
-    const accessToken = authHeader.startsWith("Bearer ")
-      ? authHeader.slice(7).trim()
-      : "";
-
-    if (!accessToken) {
-      return res.status(401).json({
-        error: "Please sign in with Google to import from Google Sheets.",
-      });
-    }
-
-    const { spreadsheetIdOrUrl = "" } = req.body || {};
-    const rawInput = String(spreadsheetIdOrUrl).trim();
-    if (!rawInput) {
-      return res.status(400).json({
-        error: "Please select a Google Sheet or paste a Spreadsheet URL/ID.",
-      });
-    }
-
-    // Extract spreadsheetId if a full URL was pasted
-    const urlMatch = rawInput.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-    const spreadsheetId = urlMatch ? urlMatch[1] : rawInput;
-
-    // 1. Fetch spreadsheet metadata first to discover actual tab names (Never hardcode "Sheet1")
-    const metaRes = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=properties.title,sheets.properties`,
-      {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      }
-    );
-    const metaData = await metaRes.json();
-    if (!metaRes.ok) {
-      return res.status(metaRes.status).json({
-        error:
-          metaData?.error?.message ||
-          "Could not read that Google Sheet. Make sure your signed-in account has access.",
-      });
-    }
-
-    const sheetTitle = metaData?.properties?.title || "Imported Sheet";
-    const tabNames: string[] = (metaData.sheets || [])
-      .map((s: any) => s?.properties?.title)
-      .filter(Boolean);
-
-    if (tabNames.length === 0) {
-      return res.status(400).json({
-        error: "No tabs found in the selected Google Sheet.",
-      });
-    }
-
-    // 2. Read values from up to first 4 tabs
-    const tabsToRead = tabNames.slice(0, 4);
-    const rangesQuery = tabsToRead
-      .map((t) => `ranges=${encodeURIComponent(`'${t}'!A1:G100`)}`)
-      .join("&");
-
-    const valuesRes = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchGet?${rangesQuery}`,
-      {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      }
-    );
-    const valuesData = await valuesRes.json();
-    if (!valuesRes.ok) {
-      return res.status(valuesRes.status).json({
-        error:
-          valuesData?.error?.message || "Failed to read rows from Google Sheet.",
-      });
-    }
-
-    const collectedLines: string[] = [];
-    for (const vr of valuesData.valueRanges || []) {
-      const rows: any[][] = vr.values || [];
-      for (const row of rows) {
-        const rowText = row
-          .map((cell) => String(cell || "").trim())
-          .filter(Boolean)
-          .join(" | ");
-        if (rowText) {
-          collectedLines.push(rowText);
-        }
-      }
-    }
-
-    res.json({
-      success: true,
-      spreadsheetId,
-      sheetTitle,
-      discoveredTabs: tabNames,
-      rawTextDump: collectedLines.join("\n"),
-      rowCount: collectedLines.length,
-    });
-  } catch (error: any) {
-    console.error("Error in /api/sheets/import-from-sheet:", error);
-    res.status(500).json({
-      error: error?.message || "Failed to import data from Google Sheet.",
-    });
-  }
-});
-
-async function startServer() {
-  const PORT = 3000;
-
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(__dirname, "dist");
-    app.use(express.static(distPath));
-    app.get("*", (_req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
-  }
-
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Tidy Up RSA Studio server running on http://0.0.0.0:${PORT}`);
   });
 }
 
-startServer();
+const IGNORED_DIRS = new Set([
+  '.git',
+  'node_modules',
+  '.next',
+  '.nuxt',
+  '.svelte-kit',
+  '.repoforge-dist',
+  'bower_components',
+  'vendor',
+  'coverage',
+  '.turbo',
+  '.cache',
+]);
+
+const EXT_TO_LANG: Record<string, string> = {
+  '.ts': 'TypeScript',
+  '.tsx': 'TypeScript',
+  '.js': 'JavaScript',
+  '.jsx': 'JavaScript',
+  '.mjs': 'JavaScript',
+  '.cjs': 'JavaScript',
+  '.vue': 'Vue',
+  '.svelte': 'Svelte',
+  '.astro': 'Astro',
+  '.css': 'CSS',
+  '.scss': 'SCSS',
+  '.sass': 'Sass',
+  '.less': 'Less',
+  '.html': 'HTML',
+  '.json': 'JSON',
+  '.md': 'Markdown',
+  '.prisma': 'Prisma',
+  '.sql': 'SQL',
+  '.py': 'Python',
+  '.go': 'Go',
+  '.rs': 'Rust',
+};
+
+function parsePrismaModels(content: string, sourceFile: string): DetectedSchemaModel[] {
+  const models: DetectedSchemaModel[] = [];
+  const modelRegex = /model\s+([A-Za-z0-9_]+)\s*\{([^}]*)\}/g;
+  for (const match of content.matchAll(modelRegex)) {
+    const modelName = match[1];
+    const body = match[2];
+    const fields: DetectedSchemaField[] = [];
+    for (const rawLine of body.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('//') || line.startsWith('@@')) continue;
+      const tokens = line.split(/\s+/);
+      if (tokens.length >= 2) {
+        const fname = tokens[0];
+        const ftype = tokens[1];
+        fields.push({
+          name: fname,
+          type: ftype.replace(/\?$/, ''),
+          isOptional: ftype.endsWith('?'),
+          isPrimary: line.includes('@id'),
+        });
+      }
+    }
+    models.push({ name: modelName, sourceFile, orm: 'Prisma', fields: fields.slice(0, 25) });
+  }
+  return models;
+}
+
+function parseDrizzleModels(content: string, sourceFile: string): DetectedSchemaModel[] {
+  const models: DetectedSchemaModel[] = [];
+  const tableRegex = /(?:pgTable|mysqlTable|sqliteTable)\s*\(\s*['"`]([a-zA-Z0-9_]+)['"`]\s*,\s*\{([\s\S]*?)\}\s*(?:,|\))/g;
+  for (const match of content.matchAll(tableRegex)) {
+    const tableName = match[1];
+    const body = match[2];
+    const fields: DetectedSchemaField[] = [];
+    const colRegex = /([a-zA-Z0-9_]+)\s*:\s*([a-zA-Z0-9_]+)\s*\(/g;
+    for (const cm of body.matchAll(colRegex)) {
+      const slice = body.slice(cm.index || 0, (cm.index || 0) + 120);
+      fields.push({
+        name: cm[1],
+        type: cm[2],
+        isPrimary: slice.includes('primaryKey'),
+        isOptional: !slice.includes('notNull') && !slice.includes('primaryKey'),
+      });
+    }
+    models.push({ name: tableName, sourceFile, orm: 'Drizzle', fields: fields.slice(0, 25) });
+  }
+  return models;
+}
+
+function parseSqlModels(content: string, sourceFile: string): DetectedSchemaModel[] {
+  const models: DetectedSchemaModel[] = [];
+  const createRegex = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["`]?([a-zA-Z0-9_]+)["`]?\s*\(([\s\S]*?)\);/gi;
+  for (const match of content.matchAll(createRegex)) {
+    const tableName = match[1];
+    const body = match[2];
+    const fields: DetectedSchemaField[] = [];
+    for (const rawLine of body.split(',')) {
+      const line = rawLine.trim();
+      if (!line || /^(PRIMARY|FOREIGN|UNIQUE|CONSTRAINT|CHECK|KEY|INDEX)\b/i.test(line)) continue;
+      const parts = line.split(/\s+/);
+      if (parts.length >= 2) {
+        fields.push({
+          name: parts[0].replace(/["`]/g, ''),
+          type: parts[1].toUpperCase(),
+          isPrimary: /PRIMARY\s+KEY/i.test(line),
+          isOptional: !/NOT\s+NULL/i.test(line),
+        });
+      }
+    }
+    if (fields.length > 0) {
+      models.push({ name: tableName, sourceFile, orm: 'SQL', fields: fields.slice(0, 25) });
+    }
+  }
+  return models;
+}
+
+function detectApiServerCapability(
+  pkg: Record<string, unknown> | null,
+  targetDir: string
+): ApiServerState {
+  const deps: Record<string, string> = {
+    ...((pkg?.dependencies as Record<string, string>) || {}),
+    ...((pkg?.devDependencies as Record<string, string>) || {}),
+  };
+  const scripts = ((pkg?.scripts as Record<string, string>) || {});
+
+  const entryCandidates = [
+    'server.ts',
+    'server.js',
+    'server.mjs',
+    'src/server.ts',
+    'src/server.js',
+    'app.ts',
+    'app.js',
+    'api/index.ts',
+    'api/index.js',
+    'backend/server.js',
+    'src/index.ts',
+    'src/index.js',
+    'index.ts',
+    'index.js',
+  ];
+
+  const hasBackendDep =
+    'express' in deps ||
+    'fastify' in deps ||
+    'koa' in deps ||
+    'hono' in deps ||
+    '@hono/node-server' in deps ||
+    '@nestjs/core' in deps ||
+    'polka' in deps;
+
+  let detectedEntry: string | null = null;
+  for (const cand of entryCandidates) {
+    const abs = path.join(targetDir, cand);
+    if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
+      // Avoid picking pure frontend src/index.tsx or React DOM entrypoints
+      try {
+        const text = fs.readFileSync(abs, 'utf-8').slice(0, 4000);
+        if (
+          text.includes('express(') ||
+          text.includes('fastify(') ||
+          text.includes('createServer(') ||
+          text.includes('.listen(') ||
+          text.includes('Hono(') ||
+          cand.startsWith('server.') ||
+          cand.startsWith('src/server.')
+        ) {
+          detectedEntry = cand;
+          break;
+        }
+      } catch {
+        // Ignore
+      }
+    }
+  }
+
+  let startCommand: string | null = null;
+  if (detectedEntry) {
+    startCommand = `npx tsx ${detectedEntry}`;
+  } else if (
+    hasBackendDep &&
+    scripts.start &&
+    !scripts.start.includes('react-scripts') &&
+    !scripts.start.includes('vite')
+  ) {
+    startCommand = 'npm start';
+  }
+
+  return {
+    capable: Boolean(detectedEntry || startCommand),
+    detectedEntry,
+    startCommand,
+    status: 'stopped',
+    logs: [],
+  };
+}
+
+function detectFrameworkFromPkg(
+  pkg: Record<string, unknown> | null,
+  dirPath: string
+): { framework: string; buildStrategy: string } {
+  const deps: Record<string, string> = {
+    ...((pkg?.dependencies as Record<string, string>) || {}),
+    ...((pkg?.devDependencies as Record<string, string>) || {}),
+  };
+  const scripts = ((pkg?.scripts as Record<string, string>) || {});
+
+  const hasIndexHtml =
+    fs.existsSync(path.join(dirPath, 'index.html')) ||
+    fs.existsSync(path.join(dirPath, 'public', 'index.html'));
+
+  if ('next' in deps) return { framework: 'Next.js', buildStrategy: 'npm run build' };
+  if ('@sveltejs/kit' in deps) return { framework: 'SvelteKit', buildStrategy: 'vite build' };
+  if ('svelte' in deps) {
+    return { framework: 'Svelte', buildStrategy: scripts.build ? 'npm run build' : 'Rollup / Vite Bundle' };
+  }
+  if ('nuxt' in deps) return { framework: 'Nuxt', buildStrategy: 'npm run build' };
+  if ('astro' in deps) return { framework: 'Astro', buildStrategy: 'astro build' };
+  if ('@angular/core' in deps) return { framework: 'Angular', buildStrategy: 'npm run build' };
+  if ('vite' in deps) {
+    if ('vue' in deps) return { framework: 'Vite + Vue', buildStrategy: 'vite build --base=./' };
+    if ('react' in deps || 'preact' in deps) {
+      return { framework: 'Vite + React', buildStrategy: 'vite build --base=./' };
+    }
+    return { framework: 'Vite Web App', buildStrategy: 'vite build --base=./' };
+  }
+  if ('react-scripts' in deps) {
+    return { framework: 'Create React App', buildStrategy: 'PUBLIC_URL=. react-scripts build' };
+  }
+  if ('vue' in deps) {
+    return { framework: 'Vue SPA', buildStrategy: scripts.build ? 'npm run build' : 'esbuild / Static' };
+  }
+  if ('react' in deps) {
+    return {
+      framework: 'React Application',
+      buildStrategy: scripts.build ? 'npm run build' : 'esbuild JSX/TSX Bundler',
+    };
+  }
+  if ('express' in deps || 'fastify' in deps || 'koa' in deps || 'hono' in deps) {
+    return {
+      framework: hasIndexHtml ? 'Full-Stack Node + Web' : 'Node.js API Server',
+      buildStrategy: scripts.build ? 'npm run build + API Proxy' : 'Sandbox API Subprocess Proxy',
+    };
+  }
+  if (scripts.build) {
+    return { framework: 'Node.js / Bundled Web', buildStrategy: 'npm run build' };
+  }
+  if (hasIndexHtml) {
+    return {
+      framework: pkg ? 'Static HTML + npm Assets' : 'Static HTML / CSS / JS',
+      buildStrategy: pkg ? 'npm install + Static Serve' : 'Direct Static Serve',
+    };
+  }
+  return { framework: pkg ? 'Node.js Package' : 'Generic Repository', buildStrategy: 'Source & Asset Inspection' };
+}
+
+async function discoverSubProjects(repoDir: string): Promise<SubProjectInfo[]> {
+  const results: SubProjectInfo[] = [];
+
+  const inspectDir = async (relDir: string, depth: number) => {
+    const absDir = relDir ? path.join(repoDir, relDir) : repoDir;
+    const pkgPath = path.join(absDir, 'package.json');
+    const htmlPath = path.join(absDir, 'index.html');
+    const pubHtmlPath = path.join(absDir, 'public', 'index.html');
+
+    let pkg: Record<string, unknown> | null = null;
+    if (fs.existsSync(pkgPath)) {
+      try {
+        pkg = JSON.parse(await fsp.readFile(pkgPath, 'utf-8'));
+      } catch {
+        pkg = null;
+      }
+    }
+
+    const hasIndexHtml = fs.existsSync(htmlPath) || fs.existsSync(pubHtmlPath);
+    const scripts = (pkg?.scripts as Record<string, string>) || {};
+    const depsCount =
+      Object.keys((pkg?.dependencies as Record<string, string>) || {}).length +
+      Object.keys((pkg?.devDependencies as Record<string, string>) || {}).length;
+
+    if (relDir === '' || pkg !== null || hasIndexHtml) {
+      const { framework } = detectFrameworkFromPkg(pkg, absDir);
+      results.push({
+        subPath: relDir,
+        label: relDir || '(Repository Root)',
+        framework,
+        hasBuildScript: Boolean(scripts.build),
+        hasIndexHtml,
+        dependencyCount: depsCount,
+      });
+    }
+
+    if (depth >= 2) return;
+
+    let entries: fs.Dirent[] = [];
+    try {
+      entries = await fsp.readdir(absDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (IGNORED_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
+      const lower = entry.name.toLowerCase();
+      if (
+        lower === 'test' ||
+        lower === 'tests' ||
+        lower === '__tests__' ||
+        lower === 'cypress' ||
+        lower === 'docs' ||
+        lower === 'scripts' ||
+        lower === 'tooling'
+      ) {
+        continue;
+      }
+      const childRel = relDir ? `${relDir}/${entry.name}` : entry.name;
+      await inspectDir(childRel, depth + 1);
+    }
+  };
+
+  await inspectDir('', 0);
+  return results.slice(0, 60);
+}
+
+async function analyzeWorkspaceTarget(
+  repoDir: string,
+  targetSubPath: string
+): Promise<{
+  framework: string;
+  packageManager: string;
+  buildStrategy: string;
+  totalFiles: number;
+  totalBytes: number;
+  scripts: Record<string, string>;
+  dependencies: DependencyItem[];
+  normalizations: NormalizationAction[];
+  files: FileEntry[];
+  languages: LanguageStat[];
+  envVars: EnvVarItem[];
+  readme: string;
+  databaseSchema: DatabaseSchemaSummary;
+  apiServer: ApiServerState;
+}> {
+  const targetDir = targetSubPath ? path.join(repoDir, targetSubPath) : repoDir;
+  const files: FileEntry[] = [];
+  const langMap = new Map<string, { files: number; bytes: number }>();
+  const detectedEnvKeys = new Set<string>();
+  const schemaModels: DetectedSchemaModel[] = [];
+  const schemaFiles = new Set<string>();
+  let totalFiles = 0;
+  let totalBytes = 0;
+
+  const walk = async (absCurrent: string, relFromRepo: string) => {
+    let entries: fs.Dirent[] = [];
+    try {
+      entries = await fsp.readdir(absCurrent, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    entries.sort((a, b) => {
+      if (a.isDirectory() && !b.isDirectory()) return -1;
+      if (!a.isDirectory() && b.isDirectory()) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    for (const entry of entries) {
+      if (IGNORED_DIRS.has(entry.name) || entry.name === '.DS_Store') continue;
+
+      const absChild = path.join(absCurrent, entry.name);
+      const relChild = relFromRepo ? `${relFromRepo}/${entry.name}` : entry.name;
+
+      if (entry.isDirectory()) {
+        if (files.length < 800) {
+          files.push({ path: relChild, type: 'dir', size: 0 });
+        }
+        await walk(absChild, relChild);
+      } else if (entry.isFile()) {
+        let size = 0;
+        try {
+          const st = await fsp.stat(absChild);
+          size = st.size;
+        } catch {
+          size = 0;
+        }
+        totalFiles += 1;
+        totalBytes += size;
+        if (files.length < 800) {
+          files.push({ path: relChild, type: 'file', size });
+        }
+
+        const ext = path.extname(entry.name).toLowerCase();
+        const lang = EXT_TO_LANG[ext];
+        if (lang) {
+          const prev = langMap.get(lang) || { files: 0, bytes: 0 };
+          prev.files += 1;
+          prev.bytes += size;
+          langMap.set(lang, prev);
+        }
+
+        if (size > 0 && size < 180_000) {
+          if (ext === '.prisma') {
+            try {
+              const content = await fsp.readFile(absChild, 'utf-8');
+              const parsedModels = parsePrismaModels(content, relChild);
+              if (parsedModels.length > 0) {
+                schemaFiles.add(relChild);
+                schemaModels.push(...parsedModels);
+              }
+            } catch {
+              // Ignore
+            }
+          } else if (ext === '.sql') {
+            try {
+              const content = await fsp.readFile(absChild, 'utf-8');
+              const parsedModels = parseSqlModels(content, relChild);
+              if (parsedModels.length > 0) {
+                schemaFiles.add(relChild);
+                schemaModels.push(...parsedModels);
+              }
+            } catch {
+              // Ignore
+            }
+          } else if (ext === '.ts' || ext === '.tsx' || ext === '.js' || ext === '.jsx' || ext === '.mjs') {
+            try {
+              const content = await fsp.readFile(absChild, 'utf-8');
+              const procMatches = content.matchAll(/process\.env\.([A-Z][A-Z0-9_]{2,})/g);
+              for (const m of procMatches) {
+                if (m[1] !== 'NODE_ENV' && m[1] !== 'PUBLIC_URL' && m[1] !== 'CI' && m[1] !== 'PORT') {
+                  detectedEnvKeys.add(m[1]);
+                }
+              }
+              const viteMatches = content.matchAll(/import\.meta\.env\.(VITE_[A-Z0-9_]+)/g);
+              for (const m of viteMatches) {
+                detectedEnvKeys.add(m[1]);
+              }
+
+              if (
+                content.includes('pgTable') ||
+                content.includes('mysqlTable') ||
+                content.includes('sqliteTable')
+              ) {
+                const parsedModels = parseDrizzleModels(content, relChild);
+                if (parsedModels.length > 0) {
+                  schemaFiles.add(relChild);
+                  schemaModels.push(...parsedModels);
+                }
+              }
+            } catch {
+              // Ignore
+            }
+          }
+        }
+      }
+    }
+  };
+
+  await walk(repoDir, '');
+
+  const pkgPath = path.join(targetDir, 'package.json');
+  let pkg: Record<string, unknown> | null = null;
+  if (fs.existsSync(pkgPath)) {
+    try {
+      pkg = JSON.parse(await fsp.readFile(pkgPath, 'utf-8'));
+    } catch {
+      pkg = null;
+    }
+  }
+
+  let packageManager = 'npm';
+  const normalizations: NormalizationAction[] = [];
+
+  if (
+    fs.existsSync(path.join(targetDir, 'pnpm-lock.yaml')) ||
+    fs.existsSync(path.join(repoDir, 'pnpm-lock.yaml'))
+  ) {
+    packageManager = 'pnpm → npm';
+    normalizations.push({
+      id: 'pnpm-lock',
+      title: 'Convert pnpm lockfile to npm',
+      detail: 'Removes pnpm-lock.yaml and workspace:* protocol specifiers prior to npm install.',
+      severity: 'info',
+    });
+  } else if (
+    fs.existsSync(path.join(targetDir, 'yarn.lock')) ||
+    fs.existsSync(path.join(repoDir, 'yarn.lock'))
+  ) {
+    packageManager = 'yarn → npm';
+    normalizations.push({
+      id: 'yarn-lock',
+      title: 'Normalize Yarn scripts & lockfile',
+      detail: 'Replaces yarn invocations in build scripts with npm run equivalents.',
+      severity: 'info',
+    });
+  } else if (
+    fs.existsSync(path.join(targetDir, 'bun.lockb')) ||
+    fs.existsSync(path.join(targetDir, 'bun.lock'))
+  ) {
+    packageManager = 'bun → npm';
+    normalizations.push({
+      id: 'bun-lock',
+      title: 'Normalize Bun lockfile for Node 22',
+      detail: 'Strips bun lockfiles and installs dependencies with npm.',
+      severity: 'info',
+    });
+  } else if (!pkg) {
+    packageManager = 'None (Static)';
+  }
+
+  const { framework, buildStrategy } = detectFrameworkFromPkg(pkg, targetDir);
+  const apiServer = detectApiServerCapability(pkg, targetDir);
+
+  if (apiServer.capable) {
+    normalizations.push({
+      id: 'api-proxy',
+      title: `Backend server entrypoint detected (${apiServer.detectedEntry || 'npm start'})`,
+      detail: 'Can be spawned in an isolated subprocess and queried via /sandbox-api/:id/* in Build & API.',
+      severity: 'info',
+    });
+  }
+
+  const scripts: Record<string, string> = {};
+  if (pkg?.scripts && typeof pkg.scripts === 'object') {
+    for (const [k, v] of Object.entries(pkg.scripts as Record<string, unknown>)) {
+      if (typeof v === 'string') scripts[k] = v;
+    }
+  }
+
+  const NATIVE_NOTES: Record<string, string> = {
+    bcrypt: 'Auto-swapped to pure-JS bcryptjs during normalization',
+    'node-sass': 'Auto-swapped to Dart sass during normalization',
+    'better-sqlite3': 'Native C++ addon — stripped if gyp fails',
+    canvas: 'Native Cairo addon — optional strip recommended',
+    puppeteer: 'Headless browser binary — skipped in container build',
+    prisma: 'Database ORM — models parsed in Schema Bridge below',
+    '@prisma/client': 'Database client — models parsed in Schema Bridge below',
+    'drizzle-orm': 'Drizzle ORM — tables parsed in Schema Bridge below',
+    mongoose: 'MongoDB ODM — configure MONGODB_URI in Env Config',
+    pg: 'PostgreSQL driver — configure DATABASE_URL in Env Config',
+  };
+
+  const dependencies: DependencyItem[] = [];
+  for (const kind of ['dependencies', 'devDependencies'] as const) {
+    const depObj = pkg?.[kind] as Record<string, unknown> | undefined;
+    if (!depObj || typeof depObj !== 'object') continue;
+    for (const [name, version] of Object.entries(depObj)) {
+      const note = NATIVE_NOTES[name];
+      if (note && (name === 'bcrypt' || name === 'node-sass' || name === 'better-sqlite3')) {
+        normalizations.push({
+          id: `dep-${kind}-${name}`,
+          title: `Native package detected: ${name}`,
+          detail: note,
+          severity: 'warning',
+        });
+      }
+      dependencies.push({
+        name,
+        version: String(version),
+        kind: kind === 'dependencies' ? 'runtime' : 'dev',
+        note,
+      });
+    }
+  }
+
+  normalizations.push({
+    id: 'relative-base',
+    title: 'Rewrite asset base paths & run post-build Smoke Prober',
+    detail: 'Injects relative asset resolution and verifies HTTP 200 bundle integrity automatically after every build.',
+    severity: 'info',
+  });
+
+  const envVars: EnvVarItem[] = [];
+  const seenKeys = new Set<string>();
+  const envExampleCandidates = [
+    path.join(targetDir, '.env.example'),
+    path.join(targetDir, '.env.sample'),
+    path.join(repoDir, '.env.example'),
+  ];
+
+  for (const envCandidate of envExampleCandidates) {
+    if (fs.existsSync(envCandidate)) {
+      try {
+        const rawEnv = await fsp.readFile(envCandidate, 'utf-8');
+        for (const line of rawEnv.split(/\r?\n/)) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith('#')) continue;
+          const eqIdx = trimmed.indexOf('=');
+          if (eqIdx > 0) {
+            const key = trimmed.slice(0, eqIdx).trim();
+            const val = trimmed.slice(eqIdx + 1).trim().replace(/^['"]|['"]$/g, '');
+            if (key && !seenKeys.has(key)) {
+              seenKeys.add(key);
+              envVars.push({ key, value: val, source: 'example' });
+            }
+          }
+        }
+      } catch {
+        // Ignore
+      }
+    }
+  }
+
+  for (const key of detectedEnvKeys) {
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      envVars.push({ key, value: '', source: 'detected' });
+    }
+  }
+
+  let readme = '';
+  for (const candidate of [
+    path.join(targetDir, 'README.md'),
+    path.join(targetDir, 'readme.md'),
+    path.join(repoDir, 'README.md'),
+    path.join(repoDir, 'readme.md'),
+  ]) {
+    if (fs.existsSync(candidate)) {
+      try {
+        readme = await fsp.readFile(candidate, 'utf-8');
+        break;
+      } catch {
+        // Ignore
+      }
+    }
+  }
+  if (!readme) {
+    readme = `# ${path.basename(repoDir)}\n\nNo README.md file was found in this repository.`;
+  }
+
+  const languages: LanguageStat[] = Array.from(langMap.entries())
+    .map(([language, stat]) => ({ language, files: stat.files, bytes: stat.bytes }))
+    .sort((a, b) => b.bytes - a.bytes);
+
+  const ormSet = new Set(schemaModels.map((m) => m.orm));
+  const databaseSchema: DatabaseSchemaSummary = {
+    detected: schemaModels.length > 0,
+    ormType: schemaModels.length > 0 ? Array.from(ormSet).join(' + ') : 'None',
+    sourceFiles: Array.from(schemaFiles),
+    models: schemaModels.slice(0, 30),
+  };
+
+  return {
+    framework,
+    packageManager,
+    buildStrategy,
+    totalFiles,
+    totalBytes,
+    scripts,
+    dependencies,
+    normalizations,
+    files,
+    languages,
+    envVars,
+    readme,
+    databaseSchema,
+    apiServer,
+  };
+}
+
+async function normalizePackageForBuild(targetDir: string, workspaceId: string) {
+  const lockFiles = ['pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'bun.lock', '.npmrc', '.yarnrc', '.yarnrc.yml'];
+  for (const lf of lockFiles) {
+    const lfPath = path.join(targetDir, lf);
+    if (fs.existsSync(lfPath)) {
+      await fsp.rm(lfPath, { force: true });
+      broadcastLog(workspaceId, `Removed ${lf} to standardize on npm.`);
+    }
+  }
+
+  const pkgPath = path.join(targetDir, 'package.json');
+  if (!fs.existsSync(pkgPath)) return;
+
+  try {
+    const pkg = JSON.parse(await fsp.readFile(pkgPath, 'utf-8')) as Record<string, unknown>;
+    let modified = false;
+
+    if ('packageManager' in pkg) {
+      delete pkg.packageManager;
+      modified = true;
+    }
+    if ('engines' in pkg) {
+      delete pkg.engines;
+      modified = true;
+    }
+
+    for (const field of ['dependencies', 'devDependencies'] as const) {
+      const depObj = pkg[field] as Record<string, string> | undefined;
+      if (!depObj || typeof depObj !== 'object') continue;
+
+      if ('bcrypt' in depObj) {
+        delete depObj.bcrypt;
+        depObj.bcryptjs = '^2.4.3';
+        modified = true;
+        broadcastLog(workspaceId, `Swapped native 'bcrypt' -> 'bcryptjs' in ${field}.`);
+      }
+      if ('node-sass' in depObj) {
+        delete depObj['node-sass'];
+        depObj.sass = '^1.77.0';
+        modified = true;
+        broadcastLog(workspaceId, `Swapped 'node-sass' -> 'sass' in ${field}.`);
+      }
+      for (const [k, v] of Object.entries(depObj)) {
+        if (typeof v === 'string' && (v.startsWith('workspace:') || v.startsWith('catalog:'))) {
+          depObj[k] = '*';
+          modified = true;
+        }
+      }
+    }
+
+    if (pkg.scripts && typeof pkg.scripts === 'object') {
+      const scripts = pkg.scripts as Record<string, string>;
+      if (scripts.preinstall && scripts.preinstall.includes('only-allow')) {
+        delete scripts.preinstall;
+        modified = true;
+      }
+      for (const [k, v] of Object.entries(scripts)) {
+        if (typeof v === 'string' && (v.includes('pnpm ') || v.includes('yarn '))) {
+          scripts[k] = v
+            .replace(/\bpnpm\s+run\b/g, 'npm run')
+            .replace(/\bpnpm\s+exec\b/g, 'npx')
+            .replace(/\byarn\s+run\b/g, 'npm run')
+            .replace(/\byarn\s+([a-zA-Z0-9:_-]+)/g, 'npm run $1');
+          modified = true;
+        }
+      }
+    }
+
+    if (modified) {
+      await fsp.writeFile(pkgPath, JSON.stringify(pkg, null, 2), 'utf-8');
+      broadcastLog(workspaceId, `Updated package.json for Node.js 22 compatibility.`);
+    }
+  } catch (err) {
+    broadcastLog(workspaceId, `Warning: Could not normalize package.json (${String(err)}).`);
+  }
+}
+
+async function scanBuildArtifacts(outputDir: string): Promise<BuildArtifact[]> {
+  const artifacts: BuildArtifact[] = [];
+  const walk = async (dir: string, rel: string) => {
+    let entries: fs.Dirent[] = [];
+    try {
+      entries = await fsp.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (IGNORED_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
+      const abs = path.join(dir, entry.name);
+      const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        await walk(abs, childRel);
+      } else if (entry.isFile()) {
+        try {
+          const st = await fsp.stat(abs);
+          const ext = path.extname(entry.name).toLowerCase();
+          let category: BuildArtifact['category'] = 'asset';
+          if (ext === '.js' || ext === '.mjs' || ext === '.cjs') category = 'script';
+          else if (ext === '.css') category = 'style';
+          else if (ext === '.html') category = 'markup';
+          artifacts.push({ path: childRel, size: st.size, category });
+        } catch {
+          // Skip
+        }
+      }
+    }
+  };
+  await walk(outputDir, '');
+  artifacts.sort((a, b) => b.size - a.size);
+  return artifacts.slice(0, 100);
+}
+
+async function runPostBuildSmokeProbe(ws: InternalWorkspace): Promise<SmokeProbeReport> {
+  const t0 = Date.now();
+  const checks: SmokeProbeCheck[] = [];
+  const missingAssets: string[] = [];
+  let verifiedAssets = 0;
+  let entryTitle = '(Untitled)';
+
+  const targetDir = ws.targetSubPath ? path.join(ws.repoDir, ws.targetSubPath) : ws.repoDir;
+  const outputDir = ws.outputDir || targetDir;
+  const indexHtmlPath = path.join(outputDir, 'index.html');
+
+  // Check 1: Entrypoint HTML Presence & Root Mount Verification
+  if (fs.existsSync(indexHtmlPath)) {
+    const rawHtml = await fsp.readFile(indexHtmlPath, 'utf-8');
+    const titleMatch = rawHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    if (titleMatch?.[1]) {
+      entryTitle = titleMatch[1].trim();
+    }
+    const hasBody = /<body[\s>]/i.test(rawHtml) || /<div\b/i.test(rawHtml) || /<script\b/i.test(rawHtml);
+    checks.push({
+      id: 'entry-html',
+      name: 'Entrypoint HTML & DOM Structure',
+      status: hasBody ? 'pass' : 'warn',
+      detail: hasBody
+        ? `Verified index.html (${Buffer.byteLength(rawHtml, 'utf-8')} B) · Title: "${entryTitle}"`
+        : 'index.html exists but has minimal body markup.',
+      metric: `${Date.now() - t0} ms`,
+    });
+
+    // Check 2: Local Asset Reference Resolution (scripts, stylesheets, images)
+    const assetRefs = new Set<string>();
+    for (const m of rawHtml.matchAll(/\b(?:src|href)=["']([^"']+)["']/gi)) {
+      const ref = m[1].trim();
+      if (
+        !ref ||
+        ref.startsWith('http://') ||
+        ref.startsWith('https://') ||
+        ref.startsWith('//') ||
+        ref.startsWith('data:') ||
+        ref.startsWith('#') ||
+        ref.startsWith('mailto:')
+      ) {
+        continue;
+      }
+      const cleanRef = ref.split('?')[0].split('#')[0].replace(/^\.?\/+/, '');
+      if (cleanRef) assetRefs.add(cleanRef);
+    }
+
+    for (const ref of assetRefs) {
+      const inOut = path.resolve(outputDir, ref);
+      const inTarget = path.resolve(targetDir, ref);
+      if (
+        (inOut.startsWith(path.resolve(outputDir)) && fs.existsSync(inOut)) ||
+        (inTarget.startsWith(path.resolve(targetDir)) && fs.existsSync(inTarget))
+      ) {
+        verifiedAssets += 1;
+      } else {
+        // Ignore standard optional browser favicons/manifest if missing
+        if (!/favicon|apple-touch-icon|manifest\.json/i.test(ref)) {
+          missingAssets.push(ref);
+        }
+      }
+    }
+
+    checks.push({
+      id: 'asset-integrity',
+      name: 'Static Asset Resolution',
+      status: missingAssets.length === 0 ? 'pass' : 'fail',
+      detail:
+        missingAssets.length === 0
+          ? `All ${verifiedAssets} local script/stylesheet/media asset references resolved on disk.`
+          : `${missingAssets.length} referenced asset(s) missing on disk: ${missingAssets.slice(0, 3).join(', ')}`,
+      metric: `${verifiedAssets}/${verifiedAssets + missingAssets.length} resolved`,
+    });
+  } else {
+    checks.push({
+      id: 'entry-html',
+      name: 'Entrypoint HTML & DOM Structure',
+      status: 'fail',
+      detail: 'No index.html found in compiled output directory.',
+    });
+  }
+
+  // Check 3: Bundle Footprint & Chunk Size Health
+  const totalJsBytes = ws.artifacts
+    .filter((a) => a.category === 'script')
+    .reduce((sum, a) => sum + a.size, 0);
+  const totalCssBytes = ws.artifacts
+    .filter((a) => a.category === 'style')
+    .reduce((sum, a) => sum + a.size, 0);
+  const largestJs = ws.artifacts.find((a) => a.category === 'script')?.size || 0;
+
+  checks.push({
+    id: 'bundle-budget',
+    name: 'JavaScript & Stylesheet Footprint',
+    status: largestJs > 1_200_000 ? 'warn' : 'pass',
+    detail:
+      largestJs > 1_200_000
+        ? `Large unsplit JS bundle detected (${(largestJs / 1024).toFixed(1)} KB); consider code-splitting.`
+        : `JS payload ${(totalJsBytes / 1024).toFixed(1)} KB · CSS payload ${(totalCssBytes / 1024).toFixed(1)} KB`,
+    metric: `${((totalJsBytes + totalCssBytes) / 1024).toFixed(1)} KB`,
+  });
+
+  // Check 4: Environment Variable Completeness
+  const missingEnvKeys = ws.envVars
+    .filter((e) => !e.value.trim())
+    .map((e) => e.key);
+
+  checks.push({
+    id: 'env-completeness',
+    name: 'Environment Variable Readiness',
+    status: missingEnvKeys.length === 0 ? 'pass' : 'warn',
+    detail:
+      missingEnvKeys.length === 0
+        ? ws.envVars.length > 0
+          ? `All ${ws.envVars.length} detected environment variable(s) have values assigned.`
+          : 'Zero external environment variables required.'
+        : `${missingEnvKeys.length} detected variable(s) have empty values: ${missingEnvKeys.slice(0, 4).join(', ')}`,
+    metric: `${ws.envVars.length - missingEnvKeys.length}/${ws.envVars.length} set`,
+  });
+
+  const hasFail = checks.some((c) => c.status === 'fail');
+  const hasWarn = checks.some((c) => c.status === 'warn');
+
+  return {
+    ranAt: new Date().toISOString(),
+    overallStatus: hasFail ? 'failed' : hasWarn ? 'degraded' : 'healthy',
+    responseTimeMs: Math.max(1, Date.now() - t0),
+    entryTitle,
+    totalJsBytes,
+    totalCssBytes,
+    verifiedAssets,
+    missingAssets,
+    missingEnvKeys,
+    checks,
+  };
+}
+
+async function generateModuleSummaryHtml(ws: InternalWorkspace, targetDir: string, outDir: string) {
+  await fsp.mkdir(outDir, { recursive: true });
+  const scriptRows = Object.entries(ws.scripts)
+    .map(
+      ([k, v]) =>
+        `<tr><td style="padding:8px 12px;border-bottom:1px solid #1e293b;font-family:monospace;color:#60a5fa">${k}</td><td style="padding:8px 12px;border-bottom:1px solid #1e293b;font-family:monospace;color:#cbd5e1">${v}</td></tr>`
+    )
+    .join('');
+
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>${ws.owner}/${ws.repoName} — Package Build Verification</title>
+  <style>
+    body { margin: 0; padding: 32px; background: #0f172a; color: #f8fafc; font-family: system-ui, -apple-system, sans-serif; line-height: 1.6; }
+    .container { max-width: 780px; margin: 0 auto; }
+    h1 { font-size: 22px; margin: 0 0 8px; }
+    p { color: #94a3b8; font-size: 14px; margin: 0 0 24px; }
+    table { width: 100%; border-collapse: collapse; background: #1e293b40; border: 1px solid #1e293b; border-radius: 8px; overflow: hidden; font-size: 13px; }
+    th { text-align: left; padding: 10px 12px; background: #1e293b80; color: #94a3b8; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>${ws.owner}/${ws.repoName} compiled successfully</h1>
+    <p>This repository is a ${ws.framework} without a standalone browser HTML entrypoint. Dependencies were installed in <code>${path.basename(targetDir)}</code>. If this repository exposes an HTTP API, start it from the Build &amp; API tab.</p>
+    <table>
+      <thead><tr><th>Script</th><th>Command</th></tr></thead>
+      <tbody>${scriptRows || '<tr><td colspan="2" style="padding:12px;color:#94a3b8">No npm scripts declared</td></tr>'}</tbody>
+    </table>
+  </div>
+</body>
+</html>`;
+  await fsp.writeFile(path.join(outDir, 'index.html'), html, 'utf-8');
+}
+
+async function bundleFallbackWithEsbuild(
+  targetDir: string,
+  outDir: string,
+  workspaceId: string
+): Promise<boolean> {
+  const entryCandidates = [
+    'src/main.tsx',
+    'src/index.tsx',
+    'src/main.jsx',
+    'src/index.jsx',
+    'src/main.ts',
+    'src/index.ts',
+    'src/main.js',
+    'src/index.js',
+    'index.tsx',
+    'index.jsx',
+  ];
+
+  let foundEntry: string | null = null;
+  for (const c of entryCandidates) {
+    if (fs.existsSync(path.join(targetDir, c))) {
+      foundEntry = path.join(targetDir, c);
+      break;
+    }
+  }
+
+  if (!foundEntry) return false;
+
+  broadcastLog(workspaceId, `Bundling ${path.relative(targetDir, foundEntry)} with esbuild...`);
+  await fsp.mkdir(outDir, { recursive: true });
+
+  try {
+    await esbuild.build({
+      entryPoints: [foundEntry],
+      bundle: true,
+      outfile: path.join(outDir, 'bundle.js'),
+      format: 'iife',
+      platform: 'browser',
+      target: ['es2020'],
+      jsx: 'automatic',
+      loader: {
+        '.js': 'jsx',
+        '.ts': 'ts',
+        '.tsx': 'tsx',
+        '.svg': 'dataurl',
+        '.png': 'dataurl',
+        '.jpg': 'dataurl',
+        '.gif': 'dataurl',
+        '.woff': 'dataurl',
+        '.woff2': 'dataurl',
+      },
+      define: {
+        'process.env.NODE_ENV': '"production"',
+      },
+    });
+
+    const hasCss = fs.existsSync(path.join(outDir, 'bundle.css'));
+    const htmlTemplatePath = fs.existsSync(path.join(targetDir, 'public', 'index.html'))
+      ? path.join(targetDir, 'public', 'index.html')
+      : fs.existsSync(path.join(targetDir, 'index.html'))
+      ? path.join(targetDir, 'index.html')
+      : null;
+
+    let html = `<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Compiled App</title>${
+      hasCss ? '<link rel="stylesheet" href="./bundle.css"/>' : ''
+    }</head><body><div id="root"></div><div id="app"></div><script src="./bundle.js"></script></body></html>`;
+
+    if (htmlTemplatePath) {
+      const rawHtml = await fsp.readFile(htmlTemplatePath, 'utf-8');
+      const cleaned = rawHtml.replace(/<script\b[^>]*type=["']module["'][^>]*><\/script>/gi, '');
+      html = cleaned.replace(
+        /<\/body>/i,
+        `${hasCss ? '<link rel="stylesheet" href="./bundle.css"/>' : ''}<script src="./bundle.js"></script></body>`
+      );
+    }
+
+    await fsp.writeFile(path.join(outDir, 'index.html'), html, 'utf-8');
+    broadcastLog(workspaceId, `esbuild bundle created successfully.`);
+    return true;
+  } catch (err) {
+    broadcastLog(workspaceId, `esbuild fallback error: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+}
+
+async function runWorkspaceBuild(
+  ws: InternalWorkspace,
+  options: { autoNormalize: boolean; cleanInstall: boolean }
+) {
+  const startTime = Date.now();
+  ws.status = 'building';
+  ws.errorMessage = undefined;
+  ws.logs = [];
+  broadcastStatus(ws.id);
+
+  const targetDir = ws.targetSubPath ? path.join(ws.repoDir, ws.targetSubPath) : ws.repoDir;
+  broadcastLog(ws.id, `Starting build for ${ws.owner}/${ws.repoName}${ws.targetSubPath ? ` (${ws.targetSubPath})` : ''}`);
+  broadcastLog(ws.id, `Detected stack: ${ws.framework} · Strategy: ${ws.buildStrategy}`);
+
+  try {
+    if (!fs.existsSync(targetDir)) {
+      throw new Error(`Target directory "${ws.targetSubPath}" does not exist in repository.`);
+    }
+
+    if (options.cleanInstall) {
+      const nmPath = path.join(targetDir, 'node_modules');
+      if (fs.existsSync(nmPath)) {
+        broadcastLog(ws.id, `Cleaning existing node_modules directory...`);
+        await fsp.rm(nmPath, { recursive: true, force: true });
+      }
+    }
+
+    const envOverrides: Record<string, string> = {
+      PUBLIC_URL: '.',
+    };
+    const nonEmptyEnvLines: string[] = [];
+    for (const item of ws.envVars) {
+      if (item.key && item.value) {
+        envOverrides[item.key] = item.value;
+        nonEmptyEnvLines.push(`${item.key}=${item.value}`);
+      }
+    }
+    if (nonEmptyEnvLines.length > 0) {
+      await fsp.writeFile(path.join(targetDir, '.env'), nonEmptyEnvLines.join('\n') + '\n', 'utf-8');
+      broadcastLog(ws.id, `Injected ${nonEmptyEnvLines.length} environment variable(s) into .env.`);
+    }
+
+    if (options.autoNormalize) {
+      await normalizePackageForBuild(targetDir, ws.id);
+    }
+
+    const pkgPath = path.join(targetDir, 'package.json');
+    let pkg: Record<string, unknown> | null = null;
+    if (fs.existsSync(pkgPath)) {
+      pkg = JSON.parse(await fsp.readFile(pkgPath, 'utf-8'));
+    }
+
+    const hasDeps =
+      pkg &&
+      (Object.keys((pkg.dependencies as Record<string, unknown>) || {}).length > 0 ||
+        Object.keys((pkg.devDependencies as Record<string, unknown>) || {}).length > 0);
+
+    if (hasDeps) {
+      const nmExists = fs.existsSync(path.join(targetDir, 'node_modules'));
+      if (!nmExists || options.cleanInstall) {
+        broadcastLog(ws.id, `Running npm install --include=dev --legacy-peer-deps...`);
+        const installRes = await runCommandStreaming(
+          'npm',
+          ['install', '--include=dev', '--legacy-peer-deps', '--no-audit', '--no-fund'],
+          targetDir,
+          { ...envOverrides, NODE_ENV: 'development' },
+          (line) => broadcastLog(ws.id, line),
+          180_000
+        );
+        if (installRes.code !== 0) {
+          broadcastLog(ws.id, `Warning: npm install exited with code ${installRes.code}. Checking if build can proceed...`);
+        } else {
+          broadcastLog(ws.id, `Dependencies installed successfully.`);
+        }
+      } else {
+        broadcastLog(ws.id, `Reusing cached node_modules (enable Clean Install to force reinstall).`);
+      }
+    }
+
+    const scripts = ((pkg?.scripts as Record<string, string>) || {});
+    const deps: Record<string, string> = {
+      ...((pkg?.dependencies as Record<string, string>) || {}),
+      ...((pkg?.devDependencies as Record<string, string>) || {}),
+    };
+
+    let resolvedOutputDir: string | null = null;
+
+    if (scripts.build) {
+      const isViteBuild = scripts.build.includes('vite build') || 'vite' in deps;
+      const buildArgs =
+        isViteBuild && scripts.build.trim() === 'vite build'
+          ? ['run', 'build', '--', '--base=./']
+          : ['run', 'build'];
+
+      broadcastLog(ws.id, `Executing: npm ${buildArgs.join(' ')}`);
+      const buildRes = await runCommandStreaming(
+        'npm',
+        buildArgs,
+        targetDir,
+        envOverrides,
+        (line) => broadcastLog(ws.id, line),
+        180_000
+      );
+
+      if (buildRes.code !== 0 && isViteBuild && fs.existsSync(path.join(targetDir, 'node_modules', '.bin', 'vite'))) {
+        broadcastLog(
+          ws.id,
+          `Primary build exited with code ${buildRes.code} (strict tsc checks). Attempting resilient Vite bundle...`
+        );
+        const recoveryRes = await runCommandStreaming(
+          'npx',
+          ['vite', 'build', '--base=./'],
+          targetDir,
+          envOverrides,
+          (line) => broadcastLog(ws.id, line),
+          120_000
+        );
+        if (recoveryRes.code !== 0) {
+          throw new Error(`Vite build failed with exit code ${recoveryRes.code}. Check build console logs for details.`);
+        }
+      } else if (buildRes.code !== 0) {
+        const fallbackDir = path.join(targetDir, '.repoforge-dist');
+        const bundled = await bundleFallbackWithEsbuild(targetDir, fallbackDir, ws.id);
+        if (bundled) {
+          resolvedOutputDir = fallbackDir;
+        } else {
+          throw new Error(`Build script exited with code ${buildRes.code}. Inspect the logs above or edit source files.`);
+        }
+      }
+    } else if (pkg && ('react' in deps || 'preact' in deps) && !fs.existsSync(path.join(targetDir, 'dist', 'index.html'))) {
+      const rootHtml = path.join(targetDir, 'index.html');
+      let needsBundler = true;
+      if (fs.existsSync(rootHtml)) {
+        const raw = await fsp.readFile(rootHtml, 'utf-8');
+        if (!raw.includes('type="module"') && !raw.includes('.tsx') && (raw.includes('node_modules/') || raw.includes('.js'))) {
+          needsBundler = false;
+        }
+      }
+      if (needsBundler) {
+        const fallbackDir = path.join(targetDir, '.repoforge-dist');
+        const bundled = await bundleFallbackWithEsbuild(targetDir, fallbackDir, ws.id);
+        if (bundled) {
+          resolvedOutputDir = fallbackDir;
+        }
+      }
+    }
+
+    if (!resolvedOutputDir) {
+      for (const candidate of ['dist', 'build', 'out', 'public', 'www', '.next/server/app', '.next/server/pages', '.']) {
+        const abs = path.join(targetDir, candidate);
+        if (fs.existsSync(path.join(abs, 'index.html'))) {
+          resolvedOutputDir = abs;
+          break;
+        }
+      }
+    }
+
+    if (!resolvedOutputDir) {
+      const fallbackDir = path.join(targetDir, '.repoforge-dist');
+      await generateModuleSummaryHtml(ws, targetDir, fallbackDir);
+      resolvedOutputDir = fallbackDir;
+      broadcastLog(ws.id, `Generated interactive package verification summary.`);
+    }
+
+    ws.outputDir = resolvedOutputDir;
+    ws.outputDirRelative = path.relative(ws.repoDir, resolvedOutputDir) || '.';
+    ws.artifacts = await scanBuildArtifacts(resolvedOutputDir);
+    ws.buildDurationMs = Date.now() - startTime;
+    ws.builtAt = new Date().toISOString();
+    ws.previewUrl = `/preview/${ws.id}/`;
+    ws.status = 'succeeded';
+    lastActivePreviewId = ws.id;
+
+    // Run Automated Post-Build Smoke Prober
+    ws.smokeProbe = await runPostBuildSmokeProbe(ws);
+    const passCount = ws.smokeProbe.checks.filter((c) => c.status === 'pass').length;
+    broadcastLog(
+      ws.id,
+      `Smoke Prober: ${ws.smokeProbe.overallStatus.toUpperCase()} · ${passCount}/${ws.smokeProbe.checks.length} checks passed · ${ws.smokeProbe.verifiedAssets} local assets verified`
+    );
+
+    broadcastLog(
+      ws.id,
+      `Build succeeded in ${(ws.buildDurationMs / 1000).toFixed(2)}s · Output: ${ws.outputDirRelative} (${ws.artifacts.length} artifacts)`
+    );
+    broadcastStatus(ws.id);
+    await saveWorkspaceMeta(ws);
+  } catch (err) {
+    ws.buildDurationMs = Date.now() - startTime;
+    ws.status = 'failed';
+    ws.errorMessage = err instanceof Error ? err.message : String(err);
+    broadcastLog(ws.id, `ERROR: ${ws.errorMessage}`);
+    broadcastStatus(ws.id);
+    await saveWorkspaceMeta(ws);
+  }
+}
+
+function findFreeLocalPort(minPort = 4100, maxPort = 4900): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const tryPort = (port: number) => {
+      if (port > maxPort) {
+        reject(new Error('No available sandbox ports in range 4100-4900'));
+        return;
+      }
+      const srv = net.createServer();
+      srv.unref();
+      srv.on('error', () => tryPort(port + 1));
+      srv.listen(port, '127.0.0.1', () => {
+        srv.close(() => resolve(port));
+      });
+    };
+    tryPort(minPort + Math.floor(Math.random() * 200));
+  });
+}
+
+function waitForTcpReady(port: number, timeoutMs = 6000): Promise<boolean> {
+  const start = Date.now();
+  return new Promise((resolve) => {
+    const check = () => {
+      const sock = net.createConnection({ port, host: '127.0.0.1' });
+      sock.on('connect', () => {
+        sock.destroy();
+        resolve(true);
+      });
+      sock.on('error', () => {
+        sock.destroy();
+        if (Date.now() - start >= timeoutMs) {
+          resolve(false);
+        } else {
+          setTimeout(check, 250);
+        }
+      });
+    };
+    check();
+  });
+}
+
+function stopWorkspaceApiServer(workspaceId: string) {
+  const proc = apiProcesses.get(workspaceId);
+  if (proc) {
+    try {
+      proc.kill('SIGTERM');
+      setTimeout(() => {
+        try {
+          proc.kill('SIGKILL');
+        } catch {
+          // Already exited
+        }
+      }, 1500);
+    } catch {
+      // Ignore
+    }
+    apiProcesses.delete(workspaceId);
+  }
+  const ws = workspaces.get(workspaceId);
+  if (ws) {
+    ws.apiServer.status = 'stopped';
+    ws.apiServer.port = undefined;
+    broadcastStatus(workspaceId);
+  }
+}
+
+async function startWorkspaceApiServer(ws: InternalWorkspace, customEntry?: string): Promise<void> {
+  stopWorkspaceApiServer(ws.id);
+
+  const targetDir = ws.targetSubPath ? path.join(ws.repoDir, ws.targetSubPath) : ws.repoDir;
+  const entry = customEntry?.trim() || ws.apiServer.detectedEntry;
+  const port = await findFreeLocalPort();
+
+  ws.apiServer.status = 'starting';
+  ws.apiServer.port = port;
+  ws.apiServer.proxyBaseUrl = `/sandbox-api/${ws.id}`;
+  ws.apiServer.errorMessage = undefined;
+  ws.apiServer.logs = [];
+  broadcastStatus(ws.id);
+
+  // Ensure dependencies are installed if package.json has dependencies and node_modules is missing
+  const pkgPath = path.join(targetDir, 'package.json');
+  if (fs.existsSync(pkgPath) && !fs.existsSync(path.join(targetDir, 'node_modules'))) {
+    broadcastApiLog(ws.id, `Installing dependencies prior to launching API server...`);
+    await runCommandStreaming(
+      'npm',
+      ['install', '--include=dev', '--legacy-peer-deps', '--no-audit', '--no-fund'],
+      targetDir,
+      { NODE_ENV: 'development' },
+      (line) => broadcastApiLog(ws.id, line),
+      120_000
+    );
+  }
+
+  const envMap: Record<string, string> = {
+    PORT: String(port),
+    HOST: '127.0.0.1',
+  };
+  for (const item of ws.envVars) {
+    if (item.key && item.value) envMap[item.key] = item.value;
+  }
+
+  let cmd = 'npx';
+  let args = ['tsx', entry || 'server.js'];
+  if (!entry && ws.apiServer.startCommand === 'npm start') {
+    cmd = 'npm';
+    args = ['start'];
+  }
+
+  broadcastApiLog(ws.id, `Spawning API process on internal 127.0.0.1:${port} via "${cmd} ${args.join(' ')}"`);
+
+  const child = spawn(cmd, args, {
+    cwd: targetDir,
+    env: {
+      ...process.env,
+      ...envMap,
+      FORCE_COLOR: '0',
+      NO_COLOR: '1',
+    },
+  });
+
+  apiProcesses.set(ws.id, child);
+
+  child.stdout.on('data', (d: Buffer) => {
+    for (const line of d.toString('utf-8').split(/\r?\n/)) {
+      if (line.trim()) broadcastApiLog(ws.id, line);
+    }
+  });
+  child.stderr.on('data', (d: Buffer) => {
+    for (const line of d.toString('utf-8').split(/\r?\n/)) {
+      if (line.trim()) broadcastApiLog(ws.id, line);
+    }
+  });
+
+  child.on('exit', (code) => {
+    apiProcesses.delete(ws.id);
+    if (ws.apiServer.status !== 'stopped') {
+      ws.apiServer.status = code === 0 ? 'stopped' : 'error';
+      ws.apiServer.errorMessage = `API server exited with code ${code ?? 0}`;
+      broadcastApiLog(ws.id, ws.apiServer.errorMessage);
+      broadcastStatus(ws.id);
+    }
+  });
+
+  const ready = await waitForTcpReady(port, 6500);
+  if (apiProcesses.has(ws.id)) {
+    ws.apiServer.status = 'running';
+    ws.apiServer.startedAt = new Date().toISOString();
+    broadcastApiLog(
+      ws.id,
+      ready
+        ? `API server listening on 127.0.0.1:${port} · Reverse proxy mounted at /sandbox-api/${ws.id}/*`
+        : `Process running (PID ${child.pid}) · Proxy mounted at /sandbox-api/${ws.id}/*`
+    );
+    broadcastStatus(ws.id);
+  }
+}
+
+async function importSingleRepo(params: {
+  url: string;
+  branch?: string;
+  subPath?: string;
+  autoBuild?: boolean;
+  autoNormalize?: boolean;
+  githubToken?: string;
+}): Promise<InternalWorkspace> {
+  const parsed = parseGitHubInput(params.url, params.branch, params.subPath);
+  if (!parsed) {
+    throw new Error('Invalid GitHub URL. Expected format: owner/repo or https://github.com/owner/repo');
+  }
+
+  const id = `${parsed.repoName.toLowerCase().replace(/[^a-z0-9-]/g, '-')}-${crypto.randomBytes(3).toString('hex')}`;
+  const rootDir = path.join(WORKSPACES_ROOT, id);
+  const repoDir = path.join(rootDir, 'repo');
+  await fsp.mkdir(rootDir, { recursive: true });
+
+  const authGitArgs = params.githubToken
+    ? [
+        '-c',
+        `http.extraheader=Authorization: Basic ${Buffer.from(`x-access-token:${params.githubToken}`).toString('base64')}`,
+      ]
+    : [];
+
+  const cloneArgs = [...authGitArgs, 'clone', '--depth', '1'];
+  if (params.branch || parsed.branch) {
+    cloneArgs.push('--branch', (params.branch || parsed.branch)!);
+  }
+  cloneArgs.push(parsed.cloneUrl, repoDir);
+
+  let cloneRes = await runCommandStreaming('git', cloneArgs, rootDir, {}, undefined, 90_000);
+
+  if (cloneRes.code !== 0 && !params.branch && parsed.branch) {
+    await fsp.rm(repoDir, { recursive: true, force: true });
+    cloneRes = await runCommandStreaming(
+      'git',
+      [...authGitArgs, 'clone', '--depth', '1', parsed.cloneUrl, repoDir],
+      rootDir,
+      {},
+      undefined,
+      90_000
+    );
+  }
+
+  if (cloneRes.code !== 0) {
+    await fsp.rm(rootDir, { recursive: true, force: true });
+    const errMsg =
+      cloneRes.stderr.includes('not found') || cloneRes.stderr.includes('Authentication failed')
+        ? `Repository "${parsed.owner}/${parsed.repoName}"${params.branch ? ` (branch: ${params.branch})` : ''} was not found or requires GitHub OAuth connection.`
+        : `Git clone failed: ${cloneRes.stderr.trim() || 'Unable to reach GitHub'}`;
+    throw new Error(errMsg);
+  }
+
+  const logRes = await runCommandStreaming(
+    'git',
+    ['log', '-1', '--format=%H|%h|%an|%ar|%s'],
+    repoDir,
+    {},
+    undefined,
+    10_000
+  );
+  const [commitHash = '', commitShort = '', commitAuthor = 'Unknown', commitRelativeTime = 'recently', commitMessage = ''] =
+    logRes.stdout.trim().split('|');
+
+  const branchRes = await runCommandStreaming(
+    'git',
+    ['rev-parse', '--abbrev-ref', 'HEAD'],
+    repoDir,
+    {},
+    undefined,
+    10_000
+  );
+  const detectedBranch = branchRes.stdout.trim() || params.branch || parsed.branch || 'main';
+
+  const subProjects = await discoverSubProjects(repoDir);
+
+  let targetSubPath = parsed.subPath;
+  if (targetSubPath && !fs.existsSync(path.join(repoDir, targetSubPath))) {
+    targetSubPath = '';
+  }
+
+  if (!targetSubPath && subProjects.length > 1) {
+    const rootEntry = subProjects.find((sp) => sp.subPath === '');
+    if (rootEntry && !rootEntry.hasBuildScript && !rootEntry.hasIndexHtml) {
+      const preferred =
+        subProjects.find((sp) => sp.subPath !== '' && sp.hasBuildScript && sp.hasIndexHtml) ||
+        subProjects.find((sp) => sp.subPath !== '' && sp.hasIndexHtml && sp.subPath.includes('react')) ||
+        subProjects.find((sp) => sp.subPath !== '' && sp.hasIndexHtml && sp.subPath.includes('es6')) ||
+        subProjects.find((sp) => sp.subPath !== '' && sp.hasIndexHtml);
+      if (preferred) {
+        targetSubPath = preferred.subPath;
+      }
+    }
+  }
+
+  const analysis = await analyzeWorkspaceTarget(repoDir, targetSubPath);
+
+  const initialLogs = [
+    `[${new Date().toISOString().slice(11, 19)}] Cloned ${parsed.canonicalUrl} (${detectedBranch} @ ${commitShort})`,
+    `[${new Date().toISOString().slice(11, 19)}] Indexed ${analysis.totalFiles} files (${(analysis.totalBytes / 1024).toFixed(1)} KB) · Stack: ${analysis.framework}`,
+  ];
+  if (analysis.databaseSchema.detected) {
+    initialLogs.push(
+      `[${new Date().toISOString().slice(11, 19)}] Detected ${analysis.databaseSchema.models.length} ${analysis.databaseSchema.ormType} database model(s).`
+    );
+  }
+
+  const ws: InternalWorkspace = {
+    id,
+    rootDir,
+    repoDir,
+    repoUrl: parsed.canonicalUrl,
+    owner: parsed.owner,
+    repoName: parsed.repoName,
+    branch: detectedBranch,
+    isPrivate: Boolean(params.githubToken),
+    commitHash,
+    commitShort,
+    commitAuthor,
+    commitRelativeTime,
+    commitMessage,
+    createdAt: new Date().toISOString(),
+    targetSubPath,
+    status: params.autoBuild ? 'building' : 'ready',
+    ...analysis,
+    subProjects,
+    artifacts: [],
+    logs: initialLogs,
+  };
+
+  workspaces.set(id, ws);
+  await saveWorkspaceMeta(ws);
+
+  if (params.autoBuild) {
+    void runWorkspaceBuild(ws, { autoNormalize: params.autoNormalize ?? true, cleanInstall: false });
+  }
+
+  return ws;
+}
+
+async function computeWorkspaceDiff(baseWs: InternalWorkspace, headWs: InternalWorkspace): Promise<WorkspaceDiffReport> {
+  const baseFiles = new Map<string, number>();
+  const headFiles = new Map<string, number>();
+
+  for (const f of baseWs.files) {
+    if (f.type === 'file') baseFiles.set(f.path, f.size);
+  }
+  for (const f of headWs.files) {
+    if (f.type === 'file') headFiles.set(f.path, f.size);
+  }
+
+  const allPaths = Array.from(new Set([...baseFiles.keys(), ...headFiles.keys()])).sort();
+  const changes: DiffFileChange[] = [];
+  let addedCount = 0;
+  let removedCount = 0;
+  let modifiedCount = 0;
+  let unchangedCount = 0;
+
+  for (const relPath of allPaths) {
+    const inBase = baseFiles.has(relPath);
+    const inHead = headFiles.has(relPath);
+    const bSize = baseFiles.get(relPath) ?? 0;
+    const hSize = headFiles.get(relPath) ?? 0;
+
+    if (!inBase && inHead) {
+      addedCount += 1;
+      changes.push({ path: relPath, changeType: 'added', baseSize: 0, headSize: hSize, deltaBytes: hSize });
+    } else if (inBase && !inHead) {
+      removedCount += 1;
+      changes.push({ path: relPath, changeType: 'removed', baseSize: bSize, headSize: 0, deltaBytes: -bSize });
+    } else if (bSize !== hSize) {
+      modifiedCount += 1;
+      changes.push({ path: relPath, changeType: 'modified', baseSize: bSize, headSize: hSize, deltaBytes: hSize - bSize });
+    } else if (bSize < 256_000) {
+      try {
+        const [bBuf, hBuf] = await Promise.all([
+          fsp.readFile(path.join(baseWs.repoDir, relPath)),
+          fsp.readFile(path.join(headWs.repoDir, relPath)),
+        ]);
+        if (!bBuf.equals(hBuf)) {
+          modifiedCount += 1;
+          changes.push({ path: relPath, changeType: 'modified', baseSize: bSize, headSize: hSize, deltaBytes: 0 });
+        } else {
+          unchangedCount += 1;
+        }
+      } catch {
+        unchangedCount += 1;
+      }
+    } else {
+      unchangedCount += 1;
+    }
+  }
+
+  const baseTotalArtifactBytes = baseWs.artifacts.reduce((s, a) => s + a.size, 0);
+  const headTotalArtifactBytes = headWs.artifacts.reduce((s, a) => s + a.size, 0);
+
+  return {
+    baseId: baseWs.id,
+    headId: headWs.id,
+    baseLabel: `${baseWs.owner}/${baseWs.repoName}@${baseWs.branch} (${baseWs.commitShort})`,
+    headLabel: `${headWs.owner}/${headWs.repoName}@${headWs.branch} (${headWs.commitShort})`,
+    baseTotalArtifactBytes,
+    headTotalArtifactBytes,
+    artifactDeltaBytes: headTotalArtifactBytes - baseTotalArtifactBytes,
+    addedCount,
+    removedCount,
+    modifiedCount,
+    unchangedCount,
+    changes: changes.slice(0, 250),
+  };
+}
+
+function instrumentHtmlForPreview(rawHtml: string, workspaceId: string): string {
+  const baseHref = `/preview/${workspaceId}/`;
+
+  let html = rawHtml.replace(
+    /\b(src|href)=["']\/(?!(?:\/|preview\/|api\/|sandbox-api\/))([^"']+)["']/gi,
+    '$1="./$2"'
+  );
+
+  const consoleBridge = `<script>
+(function(){
+  if (window.__repoforgeHooked) return;
+  window.__repoforgeHooked = true;
+  function send(level, args) {
+    try {
+      var msg = Array.prototype.slice.call(args).map(function(a){
+        return typeof a === 'object' ? JSON.stringify(a) : String(a);
+      }).join(' ');
+      window.parent.postMessage({ source: 'repoforge-preview', workspaceId: '${workspaceId}', level: level, message: msg }, '*');
+    } catch (e) {}
+  }
+  var origErr = console.error;
+  var origWarn = console.warn;
+  console.error = function() { send('error', arguments); return origErr.apply(console, arguments); };
+  console.warn = function() { send('warn', arguments); return origWarn.apply(console, arguments); };
+  window.addEventListener('error', function(e) { send('error', [e.message || 'Runtime error']); });
+})();
+</script>`;
+
+  if (!/<base\b/i.test(html)) {
+    if (/<head[^>]*>/i.test(html)) {
+      html = html.replace(/<head[^>]*>/i, (match) => `${match}\n  <base href="${baseHref}" />\n  ${consoleBridge}`);
+    } else {
+      html = `<head><base href="${baseHref}" />${consoleBridge}</head>` + html;
+    }
+  } else {
+    html = html.replace(/<\/head>/i, `${consoleBridge}</head>`);
+  }
+
+  return html;
+}
+
+function toSummary(ws: InternalWorkspace): WorkspaceSummary {
+  return {
+    id: ws.id,
+    owner: ws.owner,
+    repoName: ws.repoName,
+    branch: ws.branch,
+    commitShort: ws.commitShort,
+    targetSubPath: ws.targetSubPath,
+    framework: ws.framework,
+    status: ws.status,
+    totalFiles: ws.totalFiles,
+    totalBytes: ws.totalBytes,
+    buildDurationMs: ws.buildDurationMs,
+    previewUrl: ws.previewUrl,
+    apiRunning: ws.apiServer.status === 'running',
+    probeStatus: ws.smokeProbe?.overallStatus,
+    createdAt: ws.createdAt,
+  };
+}
+
+function toPublicDetail(ws: InternalWorkspace): WorkspaceDetail {
+  const { rootDir: _r, repoDir: _d, outputDir: _o, ...rest } = ws;
+  return rest;
+}
+
+async function startServer() {
+  await rehydrateWorkspaces();
+
+  const app = express();
+  app.use(express.json({ limit: '4mb' }));
+
+  // =========================================================================
+  // SUGGESTION 1: GitHub 3P OAuth (Popup-based flow per oauth-integration)
+  // =========================================================================
+
+  app.get('/api/auth/github/status', (req: Request, res: Response) => {
+    const clientOrigin = typeof req.query.origin === 'string' ? req.query.origin : undefined;
+    const session = getGitHubSession(req);
+    const configured = Boolean(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET);
+    res.json({
+      configured,
+      connected: Boolean(session),
+      user: session?.user || null,
+      callbackUrl: resolveCallbackUrl(clientOrigin),
+    });
+  });
+
+  app.get('/api/auth/github/url', (req: Request, res: Response) => {
+    const clientId = process.env.GITHUB_CLIENT_ID;
+    const clientSecret = process.env.GITHUB_CLIENT_SECRET;
+    if (!clientId || !clientSecret) {
+      res.status(400).json({
+        error:
+          'GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET are not configured yet in AI Studio Secrets.',
+      });
+      return;
+    }
+
+    const clientOrigin = typeof req.query.origin === 'string' ? req.query.origin : undefined;
+    const redirectUri = resolveCallbackUrl(clientOrigin);
+    const state = crypto.randomBytes(16).toString('hex');
+    pendingOAuthStates.set(state, { redirectUri, createdAt: Date.now() });
+
+    const params = new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      scope: 'repo read:user',
+      state,
+    });
+
+    res.json({ url: `https://github.com/login/oauth/authorize?${params.toString()}` });
+  });
+
+  app.get(['/auth/callback', '/auth/callback/'], async (req: Request, res: Response) => {
+    const code = typeof req.query.code === 'string' ? req.query.code : '';
+    const state = typeof req.query.state === 'string' ? req.query.state : '';
+
+    if (!code) {
+      res.status(400).send('Missing OAuth authorization code.');
+      return;
+    }
+
+    const pending = pendingOAuthStates.get(state);
+    pendingOAuthStates.delete(state);
+    const redirectUri = pending?.redirectUri || resolveCallbackUrl();
+
+    try {
+      const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          client_id: process.env.GITHUB_CLIENT_ID,
+          client_secret: process.env.GITHUB_CLIENT_SECRET,
+          code,
+          redirect_uri: redirectUri,
+        }),
+      });
+
+      const tokenData = (await tokenRes.json()) as { access_token?: string; error_description?: string };
+      if (!tokenData.access_token) {
+        throw new Error(tokenData.error_description || 'Failed to obtain GitHub access token.');
+      }
+
+      const userRes = await fetch('https://api.github.com/user', {
+        headers: {
+          Authorization: `Bearer ${tokenData.access_token}`,
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'RepoForge-Studio',
+        },
+      });
+      if (!userRes.ok) {
+        throw new Error('Failed to fetch GitHub user profile.');
+      }
+      const userJson = (await userRes.json()) as GitHubUser;
+
+      const sessionId = crypto.randomBytes(24).toString('hex');
+      githubSessions.set(sessionId, {
+        sessionId,
+        token: tokenData.access_token,
+        user: {
+          login: userJson.login,
+          name: userJson.name,
+          avatar_url: userJson.avatar_url,
+          html_url: userJson.html_url,
+        },
+        createdAt: Date.now(),
+      });
+
+      res.setHeader(
+        'Set-Cookie',
+        `rf_gh_session=${sessionId}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=86400`
+      );
+
+      res.send(`<!doctype html>
+<html>
+  <body style="font-family:system-ui,sans-serif;background:#0b0f17;color:#f8fafc;padding:32px;text-align:center;">
+    <script>
+      if (window.opener) {
+        window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS', sessionId: '${sessionId}' }, '*');
+        window.close();
+      } else {
+        window.location.href = '/';
+      }
+    </script>
+    <p>GitHub connected as @${userJson.login}. This window will close automatically.</p>
+  </body>
+</html>`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'OAuth callback failed';
+      res.status(500).send(`<!doctype html><html><body style="font-family:system-ui;padding:24px"><h3>Authentication Error</h3><p>${msg}</p></body></html>`);
+    }
+  });
+
+  app.post('/api/auth/github/logout', (req: Request, res: Response) => {
+    const session = getGitHubSession(req);
+    if (session) {
+      githubSessions.delete(session.sessionId);
+    }
+    res.setHeader(
+      'Set-Cookie',
+      'rf_gh_session=; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=0'
+    );
+    res.json({ disconnected: true });
+  });
+
+  app.get('/api/github/repos', async (req: Request, res: Response) => {
+    const session = getGitHubSession(req);
+    if (!session) {
+      res.status(401).json({ error: 'Not connected to GitHub.' });
+      return;
+    }
+
+    try {
+      const ghRes = await fetch(
+        'https://api.github.com/user/repos?sort=updated&per_page=60&affiliation=owner,collaborator,organization_member',
+        {
+          headers: {
+            Authorization: `Bearer ${session.token}`,
+            Accept: 'application/vnd.github+json',
+            'User-Agent': 'RepoForge-Studio',
+          },
+        }
+      );
+      if (!ghRes.ok) {
+        res.status(ghRes.status).json({ error: 'Unable to list GitHub repositories.' });
+        return;
+      }
+      const repos = (await ghRes.json()) as GitHubRepoItem[];
+      res.json({ repos });
+    } catch {
+      res.status(500).json({ error: 'Failed to reach GitHub API.' });
+    }
+  });
+
+  // List branches & PRs for any repository (uses OAuth token if connected, or git ls-remote fallback for public repos!)
+  app.get('/api/github/repos/:owner/:repo/refs', async (req: Request, res: Response) => {
+    const owner = String(req.params.owner);
+    const repo = String(req.params.repo).replace(/\.git$/, '');
+    const session = getGitHubSession(req);
+
+    const branches: GitHubBranchItem[] = [];
+    const pulls: GitHubPullRequestItem[] = [];
+
+    if (session) {
+      try {
+        const [bRes, pRes] = await Promise.all([
+          fetch(`https://api.github.com/repos/${owner}/${repo}/branches?per_page=50`, {
+            headers: {
+              Authorization: `Bearer ${session.token}`,
+              Accept: 'application/vnd.github+json',
+              'User-Agent': 'RepoForge-Studio',
+            },
+          }),
+          fetch(`https://api.github.com/repos/${owner}/${repo}/pulls?state=open&per_page=25`, {
+            headers: {
+              Authorization: `Bearer ${session.token}`,
+              Accept: 'application/vnd.github+json',
+              'User-Agent': 'RepoForge-Studio',
+            },
+          }),
+        ]);
+        if (bRes.ok) {
+          const bData = (await bRes.json()) as Array<{ name: string; commit: { sha: string } }>;
+          for (const b of bData) {
+            branches.push({ name: b.name, commitSha: b.commit.sha.slice(0, 7) });
+          }
+        }
+        if (pRes.ok) {
+          const pData = (await pRes.json()) as Array<{
+            number: number;
+            title: string;
+            head: { ref: string };
+            base: { ref: string };
+            user?: { login: string };
+          }>;
+          for (const pr of pData) {
+            pulls.push({
+              number: pr.number,
+              title: pr.title,
+              headRef: pr.head.ref,
+              baseRef: pr.base.ref,
+              author: pr.user?.login || 'unknown',
+            });
+          }
+        }
+      } catch {
+        // Fallback to git ls-remote below
+      }
+    }
+
+    if (branches.length === 0) {
+      const lsRes = await runCommandStreaming(
+        'git',
+        ['ls-remote', '--heads', `https://github.com/${owner}/${repo}.git`],
+        WORKSPACES_ROOT,
+        {},
+        undefined,
+        15_000
+      );
+      if (lsRes.code === 0) {
+        for (const line of lsRes.stdout.split(/\r?\n/)) {
+          const [sha, ref] = line.trim().split(/\s+/);
+          if (sha && ref && ref.startsWith('refs/heads/')) {
+            branches.push({
+              name: ref.slice('refs/heads/'.length),
+              commitSha: sha.slice(0, 7),
+            });
+          }
+        }
+      }
+    }
+
+    res.json({ branches, pulls });
+  });
+
+  // =========================================================================
+  // Core Workspace Routes + Diff + Smoke Probe + Backend API Proxy
+  // =========================================================================
+
+  app.get('/api/workspaces', (_req: Request, res: Response) => {
+    const list = Array.from(workspaces.values())
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map(toSummary);
+    res.json({ workspaces: list });
+  });
+
+  // SUGGESTION 2: Side-by-Side Branch / PR Diff Endpoints
+  app.get('/api/workspaces/diff', async (req: Request, res: Response) => {
+    const baseId = String(req.query.baseId || '');
+    const headId = String(req.query.headId || '');
+    const baseWs = workspaces.get(baseId);
+    const headWs = workspaces.get(headId);
+    if (!baseWs || !headWs) {
+      res.status(404).json({ error: 'Select both a Base workspace and a Head workspace to compare.' });
+      return;
+    }
+    const diff = await computeWorkspaceDiff(baseWs, headWs);
+    res.json({ diff });
+  });
+
+  app.get('/api/workspaces/diff-file', async (req: Request, res: Response) => {
+    const baseId = String(req.query.baseId || '');
+    const headId = String(req.query.headId || '');
+    const relPath = String(req.query.path || '').replace(/^\/+/, '');
+    const baseWs = workspaces.get(baseId);
+    const headWs = workspaces.get(headId);
+    if (!baseWs || !headWs || !relPath) {
+      res.status(400).json({ error: 'baseId, headId, and path are required.' });
+      return;
+    }
+
+    const readSafe = async (ws: InternalWorkspace) => {
+      const abs = path.resolve(ws.repoDir, relPath);
+      if (!abs.startsWith(path.resolve(ws.repoDir)) || !fs.existsSync(abs)) return '';
+      try {
+        return (await fsp.readFile(abs, 'utf-8')).slice(0, 80_000);
+      } catch {
+        return '';
+      }
+    };
+
+    const [baseContent, headContent] = await Promise.all([readSafe(baseWs), readSafe(headWs)]);
+    res.json({ path: relPath, baseContent, headContent });
+  });
+
+  app.post('/api/workspaces/compare-branches', async (req: Request, res: Response) => {
+    const { url, baseBranch, headBranch, subPath } = req.body as {
+      url?: string;
+      baseBranch?: string;
+      headBranch?: string;
+      subPath?: string;
+    };
+    if (!url || !baseBranch || !headBranch) {
+      res.status(400).json({ error: 'Repository URL, base branch, and head branch are required.' });
+      return;
+    }
+
+    const session = getGitHubSession(req);
+    try {
+      const [baseWs, headWs] = await Promise.all([
+        importSingleRepo({
+          url,
+          branch: baseBranch,
+          subPath,
+          autoBuild: true,
+          autoNormalize: true,
+          githubToken: session?.token,
+        }),
+        importSingleRepo({
+          url,
+          branch: headBranch,
+          subPath,
+          autoBuild: true,
+          autoNormalize: true,
+          githubToken: session?.token,
+        }),
+      ]);
+
+      const diff = await computeWorkspaceDiff(baseWs, headWs);
+      res.status(201).json({
+        baseWorkspace: toPublicDetail(baseWs),
+        headWorkspace: toPublicDetail(headWs),
+        diff,
+      });
+    } catch (err) {
+      res.status(422).json({
+        error: err instanceof Error ? err.message : 'Failed to clone comparison branches.',
+      });
+    }
+  });
+
+  app.get('/api/workspaces/:id', (req: Request, res: Response) => {
+    const ws = workspaces.get(String(req.params.id));
+    if (!ws) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+    res.json({ workspace: toPublicDetail(ws) });
+  });
+
+  app.post('/api/workspaces/import', async (req: Request, res: Response) => {
+    const { url, branch, subPath, autoBuild, autoNormalize = true } = req.body as {
+      url?: string;
+      branch?: string;
+      subPath?: string;
+      autoBuild?: boolean;
+      autoNormalize?: boolean;
+    };
+
+    if (!url || typeof url !== 'string') {
+      res.status(400).json({ error: 'Please provide a GitHub repository URL or owner/repo.' });
+      return;
+    }
+
+    const session = getGitHubSession(req);
+    try {
+      const ws = await importSingleRepo({
+        url,
+        branch,
+        subPath,
+        autoBuild,
+        autoNormalize,
+        githubToken: session?.token,
+      });
+      res.status(201).json({ workspace: toPublicDetail(ws) });
+    } catch (err) {
+      res.status(422).json({
+        error: err instanceof Error ? err.message : 'Failed to import repository.',
+      });
+    }
+  });
+
+  app.patch('/api/workspaces/:id/target', async (req: Request, res: Response) => {
+    const ws = workspaces.get(String(req.params.id));
+    if (!ws) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+    const { targetSubPath = '' } = req.body as { targetSubPath?: string };
+    const cleanSub = targetSubPath.trim().replace(/^\/+|\/+$/g, '');
+    const candidateDir = cleanSub ? path.join(ws.repoDir, cleanSub) : ws.repoDir;
+    const resolved = path.resolve(candidateDir);
+    if (!resolved.startsWith(path.resolve(ws.repoDir)) || !fs.existsSync(resolved)) {
+      res.status(400).json({ error: 'Specified target sub-directory does not exist in repository.' });
+      return;
+    }
+
+    stopWorkspaceApiServer(ws.id);
+    ws.targetSubPath = cleanSub;
+    const analysis = await analyzeWorkspaceTarget(ws.repoDir, cleanSub);
+    Object.assign(ws, analysis);
+    ws.status = 'ready';
+    ws.previewUrl = undefined;
+    ws.smokeProbe = undefined;
+    ws.artifacts = [];
+    broadcastLog(ws.id, `Switched active target directory to "${cleanSub || '(Repository Root)'}" (${ws.framework}).`);
+    await saveWorkspaceMeta(ws);
+    res.json({ workspace: toPublicDetail(ws) });
+  });
+
+  app.get('/api/workspaces/:id/file', async (req: Request, res: Response) => {
+    const ws = workspaces.get(String(req.params.id));
+    if (!ws) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+    const relPath = String(req.query.path || '').replace(/^\/+/, '');
+    if (!relPath) {
+      res.status(400).json({ error: 'Missing file path parameter' });
+      return;
+    }
+
+    const absPath = path.resolve(ws.repoDir, relPath);
+    if (!absPath.startsWith(path.resolve(ws.repoDir))) {
+      res.status(403).json({ error: 'Access denied outside repository root' });
+      return;
+    }
+
+    if (!fs.existsSync(absPath)) {
+      res.status(404).json({ error: 'File not found' });
+      return;
+    }
+
+    try {
+      const stat = await fsp.stat(absPath);
+      if (stat.isDirectory()) {
+        res.status(400).json({ error: 'Path refers to a directory' });
+        return;
+      }
+      if (stat.size > 512_000) {
+        res.json({
+          path: relPath,
+          size: stat.size,
+          truncated: true,
+          content:
+            (await fsp.readFile(absPath, 'utf-8')).slice(0, 120_000) +
+            '\n\n/* File truncated at 120 KB for editor performance */',
+        });
+        return;
+      }
+      const content = await fsp.readFile(absPath, 'utf-8');
+      res.json({ path: relPath, size: stat.size, truncated: false, content });
+    } catch {
+      res.status(500).json({ error: 'Unable to read file content' });
+    }
+  });
+
+  app.put('/api/workspaces/:id/file', async (req: Request, res: Response) => {
+    const ws = workspaces.get(String(req.params.id));
+    if (!ws) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+    const { path: relPath, content } = req.body as { path?: string; content?: string };
+    if (!relPath || typeof content !== 'string') {
+      res.status(400).json({ error: 'File path and content are required' });
+      return;
+    }
+
+    const absPath = path.resolve(ws.repoDir, relPath.replace(/^\/+/, ''));
+    if (!absPath.startsWith(path.resolve(ws.repoDir))) {
+      res.status(403).json({ error: 'Access denied outside repository root' });
+      return;
+    }
+
+    try {
+      await fsp.mkdir(path.dirname(absPath), { recursive: true });
+      await fsp.writeFile(absPath, content, 'utf-8');
+      broadcastLog(ws.id, `Saved edits to ${relPath} (${Buffer.byteLength(content, 'utf-8')} bytes).`);
+      await saveWorkspaceMeta(ws);
+      res.json({ ok: true, path: relPath });
+    } catch {
+      res.status(500).json({ error: 'Failed to write file' });
+    }
+  });
+
+  app.put('/api/workspaces/:id/env', async (req: Request, res: Response) => {
+    const ws = workspaces.get(String(req.params.id));
+    if (!ws) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+    const { envVars } = req.body as { envVars?: EnvVarItem[] };
+    if (!Array.isArray(envVars)) {
+      res.status(400).json({ error: 'envVars array is required' });
+      return;
+    }
+    ws.envVars = envVars
+      .filter((e) => Boolean(e.key?.trim()))
+      .map((e) => ({
+        key: e.key.trim(),
+        value: String(e.value ?? ''),
+        source: e.source || 'custom',
+      }));
+    if (ws.outputDir) {
+      ws.smokeProbe = await runPostBuildSmokeProbe(ws);
+    }
+    await saveWorkspaceMeta(ws);
+    res.json({ workspace: toPublicDetail(ws) });
+  });
+
+  app.post('/api/workspaces/:id/build', (req: Request, res: Response) => {
+    const ws = workspaces.get(String(req.params.id));
+    if (!ws) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+    if (ws.status === 'building') {
+      res.status(409).json({ error: 'A build is already running for this workspace.' });
+      return;
+    }
+    const { autoNormalize = true, cleanInstall = false } = (req.body || {}) as {
+      autoNormalize?: boolean;
+      cleanInstall?: boolean;
+    };
+
+    void runWorkspaceBuild(ws, { autoNormalize, cleanInstall });
+    res.json({ started: true, workspace: toPublicDetail(ws) });
+  });
+
+  // SUGGESTION 5: On-demand Post-Build Smoke Prober endpoint
+  app.post('/api/workspaces/:id/probe', async (req: Request, res: Response) => {
+    const ws = workspaces.get(String(req.params.id));
+    if (!ws) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+    ws.smokeProbe = await runPostBuildSmokeProbe(ws);
+    await saveWorkspaceMeta(ws);
+    res.json({ smokeProbe: ws.smokeProbe, workspace: toPublicDetail(ws) });
+  });
+
+  // SUGGESTION 4: Backend API Subprocess Lifecycle & Reverse Proxy
+  app.post('/api/workspaces/:id/api-server/start', async (req: Request, res: Response) => {
+    const ws = workspaces.get(String(req.params.id));
+    if (!ws) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+    const { entry } = (req.body || {}) as { entry?: string };
+    try {
+      await startWorkspaceApiServer(ws, entry);
+      res.json({ workspace: toPublicDetail(ws) });
+    } catch (err) {
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Unable to start API subprocess.',
+      });
+    }
+  });
+
+  app.post('/api/workspaces/:id/api-server/stop', (req: Request, res: Response) => {
+    const ws = workspaces.get(String(req.params.id));
+    if (!ws) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+    stopWorkspaceApiServer(ws.id);
+    res.json({ workspace: toPublicDetail(ws) });
+  });
+
+  app.all('/sandbox-api/:id*', async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const ws = workspaces.get(id);
+    if (!ws || ws.apiServer.status !== 'running' || !ws.apiServer.port) {
+      res.status(503).json({
+        error: 'Workspace backend API subprocess is not running. Start it in Build & API.',
+      });
+      return;
+    }
+
+    const prefix = `/sandbox-api/${id}`;
+    const subUrl = req.originalUrl.startsWith(prefix)
+      ? req.originalUrl.slice(prefix.length) || '/'
+      : '/';
+    const targetUrl = `http://127.0.0.1:${ws.apiServer.port}${subUrl.startsWith('/') ? subUrl : '/' + subUrl}`;
+
+    try {
+      const headers: Record<string, string> = {};
+      for (const [k, v] of Object.entries(req.headers)) {
+        if (typeof v === 'string' && k !== 'host' && k !== 'connection' && k !== 'content-length') {
+          headers[k] = v;
+        }
+      }
+
+      const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
+      const upstreamRes = await fetch(targetUrl, {
+        method: req.method,
+        headers,
+        body: hasBody && req.body ? JSON.stringify(req.body) : undefined,
+      });
+
+      res.status(upstreamRes.status);
+      const ct = upstreamRes.headers.get('content-type');
+      if (ct) res.setHeader('Content-Type', ct);
+      const buf = Buffer.from(await upstreamRes.arrayBuffer());
+      res.send(buf);
+    } catch (err) {
+      res.status(502).json({
+        error: `Upstream sandbox API unreachable on port ${ws.apiServer.port}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      });
+    }
+  });
+
+  app.get('/api/workspaces/:id/logs', (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const ws = workspaces.get(id);
+    if (!ws) {
+      res.status(404).end();
+      return;
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    const initPayload = JSON.stringify({
+      type: 'init',
+      logs: ws.logs,
+      status: ws.status,
+      previewUrl: ws.previewUrl,
+      buildDurationMs: ws.buildDurationMs,
+      smokeProbe: ws.smokeProbe,
+      apiServer: ws.apiServer,
+    });
+    res.write(`data: ${initPayload}\n\n`);
+
+    let set = sseClients.get(id);
+    if (!set) {
+      set = new Set();
+      sseClients.set(id, set);
+    }
+    set.add(res);
+
+    req.on('close', () => {
+      set?.delete(res);
+    });
+  });
+
+  app.get('/api/workspaces/:id/download', (req: Request, res: Response) => {
+    const ws = workspaces.get(String(req.params.id));
+    if (!ws) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+
+    const mode = req.query.mode === 'dist' ? 'dist' : 'project';
+    const sourceDir = mode === 'dist' && ws.outputDir ? ws.outputDir : ws.repoDir;
+    if (!fs.existsSync(sourceDir)) {
+      res.status(404).json({ error: 'Archive target directory does not exist yet. Build the project first.' });
+      return;
+    }
+
+    const filename = `${ws.repoName}-${mode}-${ws.commitShort || 'export'}.tar.gz`;
+    res.setHeader('Content-Type', 'application/gzip');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    const tarProc = spawn('tar', ['-czf', '-', '--exclude=.git', '--exclude=node_modules', '-C', sourceDir, '.']);
+    tarProc.stdout.pipe(res);
+    tarProc.stderr.on('data', () => {});
+    tarProc.on('error', () => {
+      if (!res.headersSent) res.status(500).end();
+    });
+  });
+
+  app.delete('/api/workspaces/:id', async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const ws = workspaces.get(id);
+    if (!ws) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+    stopWorkspaceApiServer(id);
+    workspaces.delete(id);
+    sseClients.delete(id);
+    await fsp.rm(ws.rootDir, { recursive: true, force: true });
+    res.json({ deleted: true });
+  });
+
+  // Live Built App Preview Static & SPA Router
+  app.use('/preview/:id', async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const ws = workspaces.get(id);
+    if (!ws || !ws.outputDir || !fs.existsSync(ws.outputDir)) {
+      res.status(404).send('Preview is not built yet. Run Build Project first.');
+      return;
+    }
+
+    lastActivePreviewId = id;
+    const targetDir = ws.targetSubPath ? path.join(ws.repoDir, ws.targetSubPath) : ws.repoDir;
+
+    if (req.originalUrl === `/preview/${id}`) {
+      res.redirect(302, `/preview/${id}/`);
+      return;
+    }
+
+    const subReqPath = req.path.replace(/^\/+/, '') || 'index.html';
+
+    for (const baseRoot of [ws.outputDir, targetDir]) {
+      const candidate = path.resolve(baseRoot, subReqPath);
+      if (!candidate.startsWith(path.resolve(baseRoot))) continue;
+      if (fs.existsSync(candidate)) {
+        const stat = await fsp.stat(candidate);
+        const finalFile = stat.isDirectory() ? path.join(candidate, 'index.html') : candidate;
+        if (fs.existsSync(finalFile)) {
+          if (finalFile.endsWith('.html')) {
+            const rawHtml = await fsp.readFile(finalFile, 'utf-8');
+            res.setHeader('Content-Type', 'text/html; charset=utf-8');
+            res.send(instrumentHtmlForPreview(rawHtml, id));
+            return;
+          }
+          res.sendFile(finalFile);
+          return;
+        }
+      }
+    }
+
+    if (!path.extname(subReqPath)) {
+      const indexHtml = path.join(ws.outputDir, 'index.html');
+      if (fs.existsSync(indexHtml)) {
+        const rawHtml = await fsp.readFile(indexHtml, 'utf-8');
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.send(instrumentHtmlForPreview(rawHtml, id));
+        return;
+      }
+    }
+
+    res.status(404).send(`Asset not found: ${subReqPath}`);
+  });
+
+  // Referer-aware static asset fallback
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (
+      req.path.startsWith('/api/') ||
+      req.path.startsWith('/auth/') ||
+      req.path.startsWith('/sandbox-api/') ||
+      req.path.startsWith('/preview/') ||
+      req.path.startsWith('/src/') ||
+      req.path.startsWith('/@') ||
+      req.path.startsWith('/node_modules/.vite')
+    ) {
+      next();
+      return;
+    }
+
+    const referer = req.headers.referer || '';
+    const match = referer.match(/\/preview\/([a-zA-Z0-9_-]+)\//);
+    const wsId = match?.[1] || (req.path.startsWith('/assets/') ? lastActivePreviewId : null);
+
+    if (wsId) {
+      const ws = workspaces.get(wsId);
+      if (ws?.outputDir) {
+        const candidate = path.resolve(ws.outputDir, req.path.replace(/^\/+/, ''));
+        if (
+          candidate.startsWith(path.resolve(ws.outputDir)) &&
+          fs.existsSync(candidate) &&
+          fs.statSync(candidate).isFile()
+        ) {
+          res.sendFile(candidate);
+          return;
+        }
+      }
+    }
+    next();
+  });
+
+  if (process.env.NODE_ENV !== 'production') {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.resolve(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (_req: Request, res: Response) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`RepoForge Studio server listening on http://0.0.0.0:${PORT}`);
+  });
+}
+
+void startServer();
