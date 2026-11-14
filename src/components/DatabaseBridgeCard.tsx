@@ -103,8 +103,11 @@ export const DatabaseBridgeCard: React.FC<DatabaseBridgeCardProps> = ({
         currentUser = await signInWithGoogleFirebase();
       }
       const saved = await syncWorkspaceSnapshotToFirestore(workspace);
+      const dbLabel =
+        (firebaseConfig as { firestoreDatabaseId?: string }).firestoreDatabaseId ||
+        firebaseConfig.projectId;
       setStatusMessage(
-        `Synced workspace snapshot (${saved.workspaceId}) to Firestore (${firebaseConfig.firestoreDatabaseId.slice(0, 28)}...).`
+        `Synced workspace snapshot (${saved.workspaceId}) to Firestore (${dbLabel.slice(0, 28)}...).`
       );
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);

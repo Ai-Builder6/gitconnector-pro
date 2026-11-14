@@ -21,10 +21,13 @@ import type {
   DiffFileChange,
   EnvVarItem,
   FileEntry,
+  GeneratedDocFile,
+  GeneratedProjectDocsBundle,
   GitHubBranchItem,
   GitHubPullRequestItem,
   GitHubRepoItem,
   GitHubUser,
+  GoogleDriveUploadResult,
   LanguageStat,
   NormalizationAction,
   SmokeProbeCheck,
@@ -2863,6 +2866,1003 @@ async function startServer() {
     tarProc.on('error', () => {
       if (!res.headersSent) res.status(500).end();
     });
+  });
+
+  // =========================================================================
+  // Project README.md & GitHub Actions Workflows Generator + Google Drive Export
+  // =========================================================================
+
+  function synthesizeDocsAndWorkflows(ws: InternalWorkspace): GeneratedProjectDocsBundle {
+    const hasPackageJson =
+      ws.files.some((f) =>
+        f.path === (ws.targetSubPath ? `${ws.targetSubPath}/package.json` : 'package.json')
+      ) ||
+      ws.dependencies.length > 0 ||
+      Object.keys(ws.scripts).length > 0;
+
+    const targetPrefix = ws.targetSubPath ? `${ws.targetSubPath}/` : '';
+    const readmeRelPath = `${targetPrefix}README.md`;
+    const primaryBranch = ws.branch || 'main';
+    const workDirLine = ws.targetSubPath ? `\n      working-directory: ${ws.targetSubPath}` : '';
+
+    const formatByteSize = (bytes: number): string => {
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+      return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+    };
+
+    const langTableRows =
+      ws.languages.length > 0
+        ? ws.languages
+            .slice(0, 10)
+            .map((l) => {
+              const pct = ws.totalBytes > 0 ? ((l.bytes / ws.totalBytes) * 100).toFixed(1) : '0.0';
+              return `| ${l.language} | ${l.files} | ${formatByteSize(l.bytes)} | ${pct}% |`;
+            })
+            .join('\n')
+        : '| Static / Text | 1 | — | 100% |';
+
+    const scriptEntries = Object.entries(ws.scripts);
+    const scriptsSection =
+      scriptEntries.length > 0
+        ? [
+            '| Script | Command |',
+            '| :--- | :--- |',
+            ...scriptEntries.map(([name, cmd]) => `| \`npm run ${name}\` | \`${cmd.replace(/\|/g, '\\|')}\` |`),
+          ].join('\n')
+        : '_No npm scripts are declared in this target directory. Static HTML/CSS/JS assets can be served directly._';
+
+    const envSection =
+      ws.envVars.length > 0
+        ? [
+            'Copy `.env.example` to `.env` and populate the following keys before running locally:',
+            '',
+            '| Variable | Source | Default / Placeholder |',
+            '| :--- | :--- | :--- |',
+            ...ws.envVars.map(
+              (ev) =>
+                `| \`${ev.key}\` | ${ev.source} | \`${ev.value ? '***' : '(required)'}\` |`
+            ),
+          ].join('\n')
+        : 'Zero external environment variables are required to build and run this project.';
+
+    const subProjectsSection =
+      ws.subProjects.length > 1
+        ? [
+            '## Monorepo Packages & Sub-Projects',
+            '',
+            '| Directory | Detected Stack | Build Script | Dependencies |',
+            '| :--- | :--- | :--- | :--- |',
+            ...ws.subProjects.map(
+              (sp) =>
+                `| \`${sp.subPath || '.'}\` (${sp.label}) | ${sp.framework} | ${
+                  sp.hasBuildScript ? 'Yes' : 'No'
+                } | ${sp.dependencyCount} |`
+            ),
+            '',
+          ].join('\n')
+        : '';
+
+    const dbSection = ws.databaseSchema.detected
+      ? [
+          '## Database Schema & Models',
+          '',
+          `Detected **${ws.databaseSchema.models.length}** model(s) via **${ws.databaseSchema.ormType}** (${ws.databaseSchema.sourceFiles.join(', ')}):`,
+          '',
+          ...ws.databaseSchema.models.slice(0, 12).map((m) => {
+            const fieldSummary = m.fields
+              .slice(0, 8)
+              .map((f) => `\`${f.name}: ${f.type}${f.isPrimary ? ' (PK)' : ''}\``)
+              .join(', ');
+            return `- **${m.name}** (\`${m.sourceFile}\`): ${fieldSummary || 'structured entity'}`;
+          }),
+          '',
+        ].join('\n')
+      : '';
+
+    const runtimeDeps = ws.dependencies.filter((d) => d.kind === 'runtime');
+    const devDeps = ws.dependencies.filter((d) => d.kind === 'dev');
+    const depsSection =
+      ws.dependencies.length > 0
+        ? [
+            '## Key Dependencies',
+            '',
+            runtimeDeps.length > 0
+              ? `**Runtime (${runtimeDeps.length}):** ` +
+                runtimeDeps
+                  .slice(0, 18)
+                  .map((d) => `\`${d.name}@${d.version}\``)
+                  .join(', ')
+              : '_No runtime npm packages declared._',
+            '',
+            devDeps.length > 0
+              ? `**Development & Tooling (${devDeps.length}):** ` +
+                devDeps
+                  .slice(0, 14)
+                  .map((d) => `\`${d.name}@${d.version}\``)
+                  .join(', ')
+              : '',
+            '',
+          ]
+            .filter(Boolean)
+            .join('\n')
+        : '';
+
+    const quickstartSteps: string[] = [
+      '```bash',
+      `git clone ${ws.repoUrl}`,
+      `cd ${ws.repoName}${ws.targetSubPath ? `/${ws.targetSubPath}` : ''}`,
+    ];
+    if (hasPackageJson) {
+      quickstartSteps.push('npm install');
+      if (ws.scripts.dev) {
+        quickstartSteps.push('npm run dev');
+      } else if (ws.scripts.start) {
+        quickstartSteps.push('npm start');
+      }
+      if (ws.scripts.build) {
+        quickstartSteps.push('npm run build');
+      }
+    } else {
+      quickstartSteps.push('npx serve .');
+    }
+    quickstartSteps.push('```');
+
+    const readmeContent = [
+      `# ${ws.repoName}${ws.targetSubPath ? ` (${ws.targetSubPath})` : ''}`,
+      '',
+      `> Automated technical documentation and CI/CD reference generated by **RepoForge Studio** from \`${ws.owner}/${ws.repoName}@${primaryBranch}\` (commit \`${ws.commitShort || 'HEAD'}\`).`,
+      '',
+      '## Project Overview',
+      '',
+      `- **Source Repository:** [${ws.owner}/${ws.repoName}](${ws.repoUrl})`,
+      `- **Active Branch & Commit:** \`${primaryBranch}\` · \`${ws.commitShort || 'HEAD'}\``,
+      `- **Detected Architecture:** ${ws.framework}`,
+      `- **Package Ecosystem:** ${ws.packageManager}`,
+      `- **Build Strategy:** ${ws.buildStrategy}`,
+      `- **Indexed Footprint:** ${ws.totalFiles.toLocaleString()} files (${formatByteSize(ws.totalBytes)})`,
+      ws.apiServer.capable && ws.apiServer.detectedEntry
+        ? `- **Backend API Entrypoint:** \`${ws.apiServer.detectedEntry}\` (\`${ws.apiServer.startCommand || 'node'}\`)`
+        : '',
+      '',
+      '## Language & File Composition',
+      '',
+      '| Language | Files | Size | Share |',
+      '| :--- | ---: | ---: | ---: |',
+      langTableRows,
+      '',
+      subProjectsSection,
+      '## Quickstart & Local Development',
+      '',
+      ...quickstartSteps,
+      '',
+      '## Available Scripts',
+      '',
+      scriptsSection,
+      '',
+      '## Environment Configuration',
+      '',
+      envSection,
+      '',
+      dbSection,
+      depsSection,
+      '## Automated GitHub Actions Workflows',
+      '',
+      'This repository includes tailored CI/CD workflows under `.github/workflows/`:',
+      '',
+      '- **`.github/workflows/ci.yml`** — Installs dependencies on Node.js 22, runs static checks/tests when declared, verifies production builds, and uploads compiled artifacts.',
+      ws.apiServer.capable
+        ? '- **`.github/workflows/deploy.yml`** — Builds and deploys the full-stack Node.js service to Google Cloud Run.'
+        : '- **`.github/workflows/deploy.yml`** — Publishes the compiled static web bundle to GitHub Pages on push to the primary branch.',
+      '- **`.github/workflows/code-health.yml`** — Runs scheduled weekly and pull-request dependency security audits and repository integrity checks.',
+      '',
+    ]
+      .filter((line, idx, arr) => !(line === '' && arr[idx - 1] === ''))
+      .join('\n');
+
+    // Synthesize .github/workflows/ci.yml
+    const hasLint = Boolean(ws.scripts.lint);
+    const hasTypecheck = Boolean(ws.scripts.typecheck || ws.scripts['type-check'] || ws.scripts.check);
+    const typecheckCmd = ws.scripts.typecheck
+      ? 'npm run typecheck'
+      : ws.scripts['type-check']
+      ? 'npm run type-check'
+      : 'npm run check';
+    const hasTest =
+      Boolean(ws.scripts.test) &&
+      !String(ws.scripts.test).includes('no test specified');
+    const hasBuildScript = Boolean(ws.scripts.build);
+
+    const detectedOutDir =
+      ws.outputDirRelative ||
+      (ws.framework.toLowerCase().includes('next')
+        ? 'out'
+        : ws.framework.toLowerCase().includes('create react app')
+        ? 'build'
+        : hasBuildScript
+        ? 'dist'
+        : '.');
+
+    const artifactUploadPath =
+      ws.targetSubPath && detectedOutDir !== '.' && !detectedOutDir.startsWith(ws.targetSubPath)
+        ? `${ws.targetSubPath}/${detectedOutDir}`
+        : detectedOutDir === '.' && ws.targetSubPath
+        ? ws.targetSubPath
+        : detectedOutDir;
+
+    const ciSteps: string[] = [
+      '      - name: Checkout repository',
+      '        uses: actions/checkout@v4',
+      '',
+      '      - name: Setup Node.js 22',
+      '        uses: actions/setup-node@v4',
+      '        with:',
+      "          node-version: '22'",
+    ];
+
+    if (hasPackageJson) {
+      ciSteps.push(
+        '',
+        '      - name: Install dependencies',
+        '        run: npm install --legacy-peer-deps --no-audit --no-fund'
+      );
+      if (hasLint) {
+        ciSteps.push('', '      - name: Run linter', '        run: npm run lint');
+      }
+      if (hasTypecheck) {
+        ciSteps.push('', '      - name: Run typecheck', `        run: ${typecheckCmd}`);
+      }
+      if (hasTest) {
+        ciSteps.push(
+          '',
+          '      - name: Run test suite',
+          '        run: npm test -- --watchAll=false --passWithNoTests || npm test'
+        );
+      }
+      if (hasBuildScript) {
+        ciSteps.push('', '      - name: Build production bundle', '        run: npm run build');
+      }
+    } else {
+      ciSteps.push(
+        '',
+        '      - name: Verify static HTML entrypoint',
+        '        run: test -f index.html && echo "Verified index.html entrypoint"'
+      );
+    }
+
+    ciSteps.push(
+      '',
+      '      - name: Upload build artifacts',
+      '        uses: actions/upload-artifact@v4',
+      '        with:',
+      `          name: ${ws.repoName}-build-output`,
+      `          path: ${artifactUploadPath}`,
+      '          if-no-files-found: warn'
+    );
+
+    const ciYaml = [
+      `name: CI — Build & Verify (${ws.repoName})`,
+      '',
+      'on:',
+      '  push:',
+      `    branches: [${primaryBranch}]`,
+      '  pull_request:',
+      `    branches: [${primaryBranch}]`,
+      '  workflow_dispatch:',
+      '',
+      'jobs:',
+      '  build-and-verify:',
+      '    runs-on: ubuntu-latest',
+      ...(ws.targetSubPath
+        ? ['    defaults:', '      run:', `       ${workDirLine.trim()}`]
+        : []),
+      '    steps:',
+      ...ciSteps,
+      '',
+    ].join('\n');
+
+    // Synthesize .github/workflows/deploy.yml
+    const deployYaml = ws.apiServer.capable
+      ? [
+          `name: Deploy — Cloud Run (${ws.repoName})`,
+          '',
+          'on:',
+          '  push:',
+          `    branches: [${primaryBranch}]`,
+          '  workflow_dispatch:',
+          '',
+          'permissions:',
+          '  contents: read',
+          '  id-token: write',
+          '',
+          'jobs:',
+          '  deploy-cloud-run:',
+          '    runs-on: ubuntu-latest',
+          '    steps:',
+          '      - name: Checkout repository',
+          '        uses: actions/checkout@v4',
+          '',
+          '      - name: Authenticate to Google Cloud',
+          '        uses: google-github-actions/auth@v2',
+          '        with:',
+          '          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}',
+          '          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}',
+          '',
+          '      - name: Deploy service to Cloud Run',
+          '        uses: google-github-actions/deploy-cloudrun@v2',
+          '        with:',
+          `          service: ${ws.repoName.toLowerCase().replace(/[^a-z0-9-]/g, '-')}`,
+          '          region: ${{ vars.GCP_REGION || \'us-central1\' }}',
+          `          source: ${ws.targetSubPath || '.'}`,
+          '',
+        ].join('\n')
+      : [
+          `name: Deploy — GitHub Pages (${ws.repoName})`,
+          '',
+          'on:',
+          '  push:',
+          `    branches: [${primaryBranch}]`,
+          '  workflow_dispatch:',
+          '',
+          'permissions:',
+          '  contents: read',
+          '  pages: write',
+          '  id-token: write',
+          '',
+          'concurrency:',
+          '  group: pages',
+          '  cancel-in-progress: true',
+          '',
+          'jobs:',
+          '  build-pages:',
+          '    runs-on: ubuntu-latest',
+          ...(ws.targetSubPath
+            ? ['    defaults:', '      run:', `       ${workDirLine.trim()}`]
+            : []),
+          '    steps:',
+          '      - name: Checkout repository',
+          '        uses: actions/checkout@v4',
+          '',
+          '      - name: Setup Node.js 22',
+          '        uses: actions/setup-node@v4',
+          '        with:',
+          "          node-version: '22'",
+          ...(hasPackageJson
+            ? [
+                '',
+                '      - name: Install dependencies',
+                '        run: npm install --legacy-peer-deps --no-audit --no-fund',
+                ...(hasBuildScript
+                  ? ['', '      - name: Build static bundle', '        run: npm run build']
+                  : []),
+              ]
+            : []),
+          '',
+          '      - name: Configure GitHub Pages',
+          '        uses: actions/configure-pages@v5',
+          '',
+          '      - name: Upload Pages artifact',
+          '        uses: actions/upload-pages-artifact@v3',
+          '        with:',
+          `          path: '${artifactUploadPath}'`,
+          '',
+          '  deploy-pages:',
+          '    needs: build-pages',
+          '    runs-on: ubuntu-latest',
+          '    environment:',
+          '      name: github-pages',
+          '      url: ${{ steps.deployment.outputs.page_url }}',
+          '    steps:',
+          '      - name: Deploy to GitHub Pages',
+          '        id: deployment',
+          '        uses: actions/deploy-pages@v4',
+          '',
+        ].join('\n');
+
+    // Synthesize .github/workflows/code-health.yml
+    const healthYaml = [
+      `name: Code Health & Dependency Audit (${ws.repoName})`,
+      '',
+      'on:',
+      '  schedule:',
+      "    - cron: '0 8 * * 1'",
+      '  pull_request:',
+      `    branches: [${primaryBranch}]`,
+      '  workflow_dispatch:',
+      '',
+      'jobs:',
+      '  security-and-footprint:',
+      '    runs-on: ubuntu-latest',
+      ...(ws.targetSubPath
+        ? ['    defaults:', '      run:', `       ${workDirLine.trim()}`]
+        : []),
+      '    steps:',
+      '      - name: Checkout repository',
+      '        uses: actions/checkout@v4',
+      ...(hasPackageJson
+        ? [
+            '',
+            '      - name: Setup Node.js 22',
+            '        uses: actions/setup-node@v4',
+            '        with:',
+            "          node-version: '22'",
+            '',
+            '      - name: Run npm security audit (high/critical)',
+            '        run: npm audit --audit-level=high || true',
+          ]
+        : []),
+      '',
+      '      - name: Report repository file count & size',
+      '        run: |',
+      '          echo "Total tracked files: $(find . -maxdepth 4 -not -path \'*/.*\' | wc -l)"',
+      '          du -sh .',
+      '',
+    ].join('\n');
+
+    const candidateFiles: Array<Omit<GeneratedDocFile, 'existsOnDisk'>> = [
+      {
+        path: readmeRelPath,
+        label: readmeRelPath,
+        kind: 'readme',
+        description: `Comprehensive technical README tailored to ${ws.owner}/${ws.repoName} (${ws.framework}).`,
+        content: readmeContent,
+      },
+      {
+        path: '.github/workflows/ci.yml',
+        label: '.github/workflows/ci.yml',
+        kind: 'workflow',
+        description: 'Continuous Integration workflow: Node 22 setup, install, lint/test, build & artifact upload.',
+        content: ciYaml,
+      },
+      {
+        path: '.github/workflows/deploy.yml',
+        label: '.github/workflows/deploy.yml',
+        kind: 'workflow',
+        description: ws.apiServer.capable
+          ? 'Cloud Run deployment workflow for full-stack / backend Node.js services.'
+          : 'Automated GitHub Pages deployment workflow for static / SPA web bundles.',
+        content: deployYaml,
+      },
+      {
+        path: '.github/workflows/code-health.yml',
+        label: '.github/workflows/code-health.yml',
+        kind: 'workflow',
+        description: 'Weekly & PR dependency vulnerability audit and footprint verification workflow.',
+        content: healthYaml,
+      },
+    ];
+
+    const files: GeneratedDocFile[] = candidateFiles.map((f) => ({
+      ...f,
+      existsOnDisk: fs.existsSync(path.join(ws.repoDir, f.path)),
+    }));
+
+    return {
+      workspaceId: ws.id,
+      repoFullName: `${ws.owner}/${ws.repoName}`,
+      branch: primaryBranch,
+      generatedAt: new Date().toISOString(),
+      files,
+    };
+  }
+
+  function createTarGzBuffer(sourceDir: string, extraArgs: string[] = []): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      const proc = spawn('tar', [
+        '-czf',
+        '-',
+        '--exclude=.git',
+        '--exclude=node_modules',
+        ...extraArgs,
+        '-C',
+        sourceDir,
+        '.',
+      ]);
+      proc.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
+      let stderrText = '';
+      proc.stderr.on('data', (chunk: Buffer) => {
+        stderrText += chunk.toString('utf-8');
+      });
+      proc.on('error', (err) => reject(err));
+      proc.on('close', (code) => {
+        if (code === 0 || chunks.length > 0) {
+          resolve(Buffer.concat(chunks));
+        } else {
+          reject(new Error(`tar exited with code ${code}: ${stderrText}`));
+        }
+      });
+    });
+  }
+
+  function guessFileMimeType(filePath: string): string {
+    const ext = path.extname(filePath).toLowerCase();
+    const map: Record<string, string> = {
+      '.md': 'text/markdown',
+      '.txt': 'text/plain',
+      '.json': 'application/json',
+      '.js': 'application/javascript',
+      '.mjs': 'application/javascript',
+      '.cjs': 'application/javascript',
+      '.ts': 'text/plain',
+      '.tsx': 'text/plain',
+      '.jsx': 'text/plain',
+      '.html': 'text/html',
+      '.css': 'text/css',
+      '.scss': 'text/plain',
+      '.yml': 'text/yaml',
+      '.yaml': 'text/yaml',
+      '.svg': 'image/svg+xml',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+      '.ico': 'image/x-icon',
+      '.sql': 'text/plain',
+      '.prisma': 'text/plain',
+      '.gz': 'application/gzip',
+    };
+    return map[ext] || 'application/octet-stream';
+  }
+
+  async function createGoogleDriveFolder(
+    accessToken: string,
+    folderName: string,
+    parentId?: string
+  ): Promise<{ id: string; name: string; webViewLink?: string }> {
+    const body: Record<string, unknown> = {
+      name: folderName,
+      mimeType: 'application/vnd.google-apps.folder',
+    };
+    if (parentId) {
+      body.parents = [parentId];
+    }
+
+    const driveRes = await fetch(
+      'https://www.googleapis.com/drive/v3/files?fields=id,name,webViewLink',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      }
+    );
+
+    if (!driveRes.ok) {
+      const errBody = await driveRes.text();
+      const err = new Error(
+        `Google Drive folder creation failed (${driveRes.status}): ${errBody.slice(0, 240)}`
+      ) as Error & { httpStatus?: number };
+      err.httpStatus = driveRes.status;
+      throw err;
+    }
+
+    return (await driveRes.json()) as { id: string; name: string; webViewLink?: string };
+  }
+
+  async function uploadGoogleDriveFileMultipart(
+    accessToken: string,
+    fileName: string,
+    parentId: string,
+    mimeType: string,
+    fileBuffer: Buffer
+  ): Promise<{ id: string; name: string; webViewLink?: string }> {
+    const boundary = `repoforge_${crypto.randomBytes(12).toString('hex')}`;
+    const metadataJson = JSON.stringify({
+      name: fileName,
+      parents: [parentId],
+    });
+
+    const preamble = Buffer.from(
+      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadataJson}\r\n--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`,
+      'utf-8'
+    );
+    const epilogue = Buffer.from(`\r\n--${boundary}--`, 'utf-8');
+    const multipartBody = Buffer.concat([preamble, fileBuffer, epilogue]);
+
+    const uploadRes = await fetch(
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': `multipart/related; boundary=${boundary}`,
+          'Content-Length': String(multipartBody.length),
+        },
+        body: multipartBody,
+      }
+    );
+
+    if (!uploadRes.ok) {
+      const errBody = await uploadRes.text();
+      const err = new Error(
+        `Google Drive file upload failed for "${fileName}" (${uploadRes.status}): ${errBody.slice(
+          0,
+          240
+        )}`
+      ) as Error & { httpStatus?: number };
+      err.httpStatus = uploadRes.status;
+      throw err;
+    }
+
+    return (await uploadRes.json()) as { id: string; name: string; webViewLink?: string };
+  }
+
+  app.get('/api/workspaces/:id/generated-docs', (req: Request, res: Response) => {
+    const ws = workspaces.get(String(req.params.id));
+    if (!ws) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+    const bundle = synthesizeDocsAndWorkflows(ws);
+    res.json({ bundle });
+  });
+
+  app.post('/api/workspaces/:id/generated-docs/apply', async (req: Request, res: Response) => {
+    const ws = workspaces.get(String(req.params.id));
+    if (!ws) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+
+    const { files } = (req.body || {}) as {
+      files?: Array<{ path: string; content: string }>;
+    };
+
+    const filesToWrite =
+      Array.isArray(files) && files.length > 0
+        ? files
+        : synthesizeDocsAndWorkflows(ws).files.map((f) => ({ path: f.path, content: f.content }));
+
+    const appliedPaths: string[] = [];
+    const repoRootResolved = path.resolve(ws.repoDir);
+
+    try {
+      for (const item of filesToWrite) {
+        const cleanRel = String(item.path || '').replace(/^\/+/, '');
+        if (!cleanRel || typeof item.content !== 'string') continue;
+        const absTarget = path.resolve(ws.repoDir, cleanRel);
+        if (!absTarget.startsWith(repoRootResolved + path.sep) && absTarget !== repoRootResolved) {
+          continue;
+        }
+        await fsp.mkdir(path.dirname(absTarget), { recursive: true });
+        await fsp.writeFile(absTarget, item.content, 'utf-8');
+        appliedPaths.push(cleanRel);
+      }
+
+      const refreshed = await analyzeWorkspaceTarget(ws.repoDir, ws.targetSubPath);
+      Object.assign(ws, refreshed);
+      broadcastLog(
+        ws.id,
+        `Wrote ${appliedPaths.length} generated README & workflow file(s) to workspace: ${appliedPaths.join(', ')}`
+      );
+      await saveWorkspaceMeta(ws);
+
+      res.json({
+        appliedPaths,
+        workspace: toPublicDetail(ws),
+        bundle: synthesizeDocsAndWorkflows(ws),
+      });
+    } catch (err) {
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Failed to write generated files to workspace.',
+      });
+    }
+  });
+
+  app.get('/api/workspaces/:id/generated-docs/download', async (req: Request, res: Response) => {
+    const ws = workspaces.get(String(req.params.id));
+    if (!ws) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+
+    const bundle = synthesizeDocsAndWorkflows(ws);
+    const tmpStage = path.join(ws.rootDir, `docs-pack-${Date.now()}`);
+    try {
+      await fsp.mkdir(tmpStage, { recursive: true });
+      for (const f of bundle.files) {
+        const dest = path.join(tmpStage, f.path);
+        await fsp.mkdir(path.dirname(dest), { recursive: true });
+        await fsp.writeFile(dest, f.content, 'utf-8');
+      }
+      const tarBuf = await createTarGzBuffer(tmpStage);
+      const filename = `${ws.repoName}-readme-and-workflows.tar.gz`;
+      res.setHeader('Content-Type', 'application/gzip');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.send(tarBuf);
+    } catch (err) {
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Unable to create docs archive.',
+      });
+    } finally {
+      await fsp.rm(tmpStage, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  app.post('/api/workspaces/:id/drive-upload', async (req: Request, res: Response) => {
+    const ws = workspaces.get(String(req.params.id));
+    if (!ws) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return;
+    }
+
+    const authHeader = req.headers.authorization || '';
+    const accessToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+    if (!accessToken) {
+      res.status(401).json({
+        error: 'Missing Google Drive authorization token. Sign in with Google first.',
+      });
+      return;
+    }
+
+    const {
+      folderName,
+      includeGeneratedDocs = true,
+      mirrorSourceFiles = true,
+      customDocs,
+    } = (req.body || {}) as {
+      folderName?: string;
+      includeGeneratedDocs?: boolean;
+      mirrorSourceFiles?: boolean;
+      customDocs?: Array<{ path: string; content: string }>;
+    };
+
+    const resolvedFolderName =
+      (folderName || '').trim() ||
+      `RepoForge - ${ws.owner}-${ws.repoName} (${ws.branch || 'main'}-${ws.commitShort || 'head'})`;
+
+    try {
+      broadcastLog(ws.id, `Creating dedicated Google Drive folder "${resolvedFolderName}"...`);
+
+      // 1. If includeGeneratedDocs is requested, ensure synthesized README & workflows are written if missing (or customDocs applied)
+      if (includeGeneratedDocs) {
+        const generated = synthesizeDocsAndWorkflows(ws);
+        const docsToEnsure =
+          Array.isArray(customDocs) && customDocs.length > 0 ? customDocs : generated.files;
+        const repoRootResolved = path.resolve(ws.repoDir);
+        let wroteAny = false;
+
+        for (const docItem of docsToEnsure) {
+          const cleanRel = String(docItem.path || '').replace(/^\/+/, '');
+          if (!cleanRel || typeof docItem.content !== 'string') continue;
+          const absDoc = path.resolve(ws.repoDir, cleanRel);
+          if (!absDoc.startsWith(repoRootResolved + path.sep)) continue;
+          // Only auto-write if customDocs were explicitly passed OR if the file doesn't exist yet on disk
+          if (Array.isArray(customDocs) || !fs.existsSync(absDoc)) {
+            await fsp.mkdir(path.dirname(absDoc), { recursive: true });
+            await fsp.writeFile(absDoc, docItem.content, 'utf-8');
+            wroteAny = true;
+          }
+        }
+
+        if (wroteAny) {
+          const refreshed = await analyzeWorkspaceTarget(ws.repoDir, ws.targetSubPath);
+          Object.assign(ws, refreshed);
+          await saveWorkspaceMeta(ws);
+        }
+      }
+
+      // 2. Create the dedicated root folder in Google Drive
+      const rootFolder = await createGoogleDriveFolder(accessToken, resolvedFolderName);
+      const folderUrl =
+        rootFolder.webViewLink || `https://drive.google.com/drive/folders/${rootFolder.id}`;
+
+      let uploadedFilesCount = 0;
+      let uploadedFoldersCount = 1; // Root folder
+      let totalBytesUploaded = 0;
+      const sampleFiles: Array<{ path: string; webViewLink?: string }> = [];
+
+      // 3. Always create and upload the complete full-project .tar.gz archive + inspection manifest JSON inside the Drive folder
+      const archiveFileName = `${ws.repoName}-full-project-${ws.commitShort || 'head'}.tar.gz`;
+      const archiveBuffer = await createTarGzBuffer(ws.repoDir);
+      const archiveUploaded = await uploadGoogleDriveFileMultipart(
+        accessToken,
+        archiveFileName,
+        rootFolder.id,
+        'application/gzip',
+        archiveBuffer
+      );
+      uploadedFilesCount += 1;
+      totalBytesUploaded += archiveBuffer.length;
+      sampleFiles.push({
+        path: archiveFileName,
+        webViewLink: archiveUploaded.webViewLink,
+      });
+
+      const manifestBuffer = Buffer.from(
+        JSON.stringify(
+          {
+            exportedBy: 'RepoForge Studio',
+            exportedAt: new Date().toISOString(),
+            repository: `${ws.owner}/${ws.repoName}`,
+            repoUrl: ws.repoUrl,
+            branch: ws.branch,
+            commitHash: ws.commitHash,
+            framework: ws.framework,
+            packageManager: ws.packageManager,
+            buildStrategy: ws.buildStrategy,
+            totalFiles: ws.totalFiles,
+            totalBytes: ws.totalBytes,
+            scripts: ws.scripts,
+            languages: ws.languages,
+            envVars: ws.envVars.map((e) => ({ key: e.key, source: e.source })),
+            databaseSchema: ws.databaseSchema,
+            smokeProbe: ws.smokeProbe || null,
+          },
+          null,
+          2
+        ),
+        'utf-8'
+      );
+      const manifestUploaded = await uploadGoogleDriveFileMultipart(
+        accessToken,
+        'repoforge-inspection-manifest.json',
+        rootFolder.id,
+        'application/json',
+        manifestBuffer
+      );
+      uploadedFilesCount += 1;
+      totalBytesUploaded += manifestBuffer.length;
+      sampleFiles.push({
+        path: 'repoforge-inspection-manifest.json',
+        webViewLink: manifestUploaded.webViewLink,
+      });
+
+      // 4. Mirror individual project files & subfolder structure into the created Google Drive folder
+      if (mirrorSourceFiles) {
+        const candidateRelPaths: string[] = [];
+        const walkProject = async (dir: string, relPrefix: string) => {
+          if (candidateRelPaths.length >= 120) return;
+          let entries: fs.Dirent[] = [];
+          try {
+            entries = await fsp.readdir(dir, { withFileTypes: true });
+          } catch {
+            return;
+          }
+          // Sort files before directories so root README, package.json, .github/workflows come first
+          entries.sort((a, b) => {
+            if (a.isFile() && b.isDirectory()) return -1;
+            if (a.isDirectory() && b.isFile()) return 1;
+            return a.name.localeCompare(b.name);
+          });
+
+          for (const entry of entries) {
+            if (candidateRelPaths.length >= 120) break;
+            if (
+              entry.name === '.git' ||
+              entry.name === 'node_modules' ||
+              entry.name === '.DS_Store' ||
+              entry.name === '.next'
+            ) {
+              continue;
+            }
+            const abs = path.join(dir, entry.name);
+            const rel = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
+            if (entry.isDirectory()) {
+              await walkProject(abs, rel);
+            } else if (entry.isFile()) {
+              try {
+                const st = await fsp.stat(abs);
+                // Individual mirrored file cap: 4 MB (larger binaries are already preserved in the full .tar.gz archive)
+                if (st.size <= 4 * 1024 * 1024) {
+                  candidateRelPaths.push(rel);
+                }
+              } catch {
+                // Skip unreadable
+              }
+            }
+          }
+        };
+
+        await walkProject(ws.repoDir, '');
+
+        // Create necessary subfolders in topological (parent-before-child) order
+        const folderIdMap = new Map<string, string>();
+        folderIdMap.set('', rootFolder.id);
+
+        const uniqueDirs = new Set<string>();
+        for (const relFile of candidateRelPaths) {
+          const dirName = path.posix.dirname(relFile);
+          if (dirName && dirName !== '.') {
+            const parts = dirName.split('/');
+            let acc = '';
+            for (const part of parts) {
+              acc = acc ? `${acc}/${part}` : part;
+              uniqueDirs.add(acc);
+            }
+          }
+        }
+
+        const sortedDirs = Array.from(uniqueDirs).sort(
+          (a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b)
+        );
+
+        for (const dirRel of sortedDirs) {
+          const parentRel = path.posix.dirname(dirRel);
+          const parentDriveId =
+            folderIdMap.get(parentRel === '.' ? '' : parentRel) || rootFolder.id;
+          const baseFolderName = path.posix.basename(dirRel);
+          const createdSub = await createGoogleDriveFolder(
+            accessToken,
+            baseFolderName,
+            parentDriveId
+          );
+          folderIdMap.set(dirRel, createdSub.id);
+          uploadedFoldersCount += 1;
+        }
+
+        // Upload project files with concurrency = 5
+        const concurrency = 5;
+        let cursor = 0;
+        const worker = async () => {
+          while (cursor < candidateRelPaths.length) {
+            const idx = cursor++;
+            const relFile = candidateRelPaths[idx];
+            const absFile = path.join(ws.repoDir, relFile);
+            const dirRel = path.posix.dirname(relFile);
+            const parentDriveId =
+              folderIdMap.get(dirRel === '.' ? '' : dirRel) || rootFolder.id;
+            const fileName = path.posix.basename(relFile);
+            const buf = await fsp.readFile(absFile);
+            const mime = guessFileMimeType(relFile);
+            const uploaded = await uploadGoogleDriveFileMultipart(
+              accessToken,
+              fileName,
+              parentDriveId,
+              mime,
+              buf
+            );
+            uploadedFilesCount += 1;
+            totalBytesUploaded += buf.length;
+            if (sampleFiles.length < 12) {
+              sampleFiles.push({
+                path: relFile,
+                webViewLink: uploaded.webViewLink,
+              });
+            }
+          }
+        };
+
+        await Promise.all(
+          Array.from({ length: Math.min(concurrency, candidateRelPaths.length) }, () => worker())
+        );
+      }
+
+      broadcastLog(
+        ws.id,
+        `Uploaded full project to Google Drive folder "${resolvedFolderName}" (${uploadedFilesCount} files across ${uploadedFoldersCount} folders · ${(totalBytesUploaded / 1024).toFixed(1)} KB).`
+      );
+
+      const result: GoogleDriveUploadResult = {
+        folderId: rootFolder.id,
+        folderName: resolvedFolderName,
+        folderUrl,
+        uploadedFilesCount,
+        uploadedFoldersCount,
+        totalBytesUploaded,
+        archiveFileName,
+        archiveFileUrl:
+          archiveUploaded.webViewLink || `https://drive.google.com/file/d/${archiveUploaded.id}/view`,
+        includedGeneratedDocs: Boolean(includeGeneratedDocs),
+        uploadedAt: new Date().toISOString(),
+        sampleFiles,
+      };
+
+      res.status(201).json({ result, workspace: toPublicDetail(ws) });
+    } catch (err) {
+      const status =
+        err && typeof err === 'object' && 'httpStatus' in err && typeof err.httpStatus === 'number'
+          ? err.httpStatus
+          : 500;
+      const message =
+        err instanceof Error ? err.message : 'Failed to upload project to Google Drive.';
+      broadcastLog(ws.id, `Google Drive upload error: ${message}`);
+      res.status(status >= 400 && status < 600 ? status : 500).json({ error: message });
+    }
   });
 
   app.delete('/api/workspaces/:id', async (req: Request, res: Response) => {

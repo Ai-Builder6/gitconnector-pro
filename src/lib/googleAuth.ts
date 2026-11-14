@@ -1,4 +1,4 @@
-import { initializeApp } from "firebase/app";
+import { getApp, getApps, initializeApp } from "firebase/app";
 import {
   getAuth,
   signInWithPopup,
@@ -8,13 +8,11 @@ import {
 } from "firebase/auth";
 import firebaseConfig from "../../firebase-applet-config.json";
 
-const app = initializeApp(firebaseConfig);
+const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 const auth = getAuth(app);
 
 export const SCOPES = [
-  "https://www.googleapis.com/auth/adwords",
-  "https://www.googleapis.com/auth/drive",
-  "https://www.googleapis.com/auth/spreadsheets",
+  "https://www.googleapis.com/auth/drive.file",
 ];
 
 function createConfiguredProvider(forceAccountPicker = false) {

@@ -20,9 +20,11 @@ import type {
 } from './types';
 import { apiFetch, setStoredGitHubSessionId } from './utils/api';
 import { BrandLogo } from './components/BrandLogo';
+import { BrandLogoModal } from './components/BrandLogoModal';
 import { RepoCommandBar } from './components/RepoCommandBar';
 import { GitHubRepoDrawer } from './components/GitHubRepoDrawer';
 import { OverviewPanel } from './components/OverviewPanel';
+import { ProjectDocsWorkflowsPanel } from './components/ProjectDocsWorkflowsPanel';
 import { CodeConfigPanel } from './components/CodeConfigPanel';
 import { BuildConsolePanel } from './components/BuildConsolePanel';
 import { LivePreviewPanel } from './components/LivePreviewPanel';
@@ -35,7 +37,7 @@ import {
   TermsPage,
 } from './components/LegalAndSupportPages';
 
-type NavTab = 'overview' | 'code' | 'build' | 'preview' | 'diff';
+type NavTab = 'overview' | 'docs' | 'code' | 'build' | 'preview' | 'diff';
 type RouteView = 'studio' | 'upgrades' | 'support' | 'privacy' | 'contact' | 'terms';
 
 function resolveRouteFromPathname(pathname: string): RouteView {
@@ -86,6 +88,7 @@ export default function App() {
   const [editorTargetFile, setEditorTargetFile] = useState<string | null>(null);
   const [fullScreenApp, setFullScreenApp] = useState(false);
   const [fullScreenReloadKey, setFullScreenReloadKey] = useState(0);
+  const [logoModalOpen, setLogoModalOpen] = useState(false);
 
   const [buildOptions, setBuildOptions] = useState<BuildOptions>({
     autoNormalize: true,
@@ -493,6 +496,7 @@ export default function App() {
 
   const studioTabs: Array<{ id: NavTab; label: string }> = [
     { id: 'overview', label: 'Overview' },
+    { id: 'docs', label: 'README & Workflows' },
     { id: 'code', label: 'Code & Env' },
     { id: 'build', label: 'Build & API' },
     { id: 'preview', label: 'Live Preview' },
@@ -653,6 +657,7 @@ export default function App() {
             theme={theme}
             onToggleTheme={() => setTheme((prev) => (prev === 'light' ? 'dark' : 'light'))}
             onOpenUpgrades={() => navigateTo('/upgrades')}
+            onOpenLogoModal={() => setLogoModalOpen(true)}
           />
 
           {githubDrawerOpen && (
@@ -776,6 +781,17 @@ export default function App() {
                     onRefreshWorkspace={async () => {
                       await loadWorkspaceDetail(activeWorkspace.id);
                     }}
+                    onOpenDocsWorkflows={() => setActiveTab('docs')}
+                  />
+                )}
+
+                {activeTab === 'docs' && (
+                  <ProjectDocsWorkflowsPanel
+                    workspace={activeWorkspace}
+                    onRefreshWorkspace={async () => {
+                      await loadWorkspaceDetail(activeWorkspace.id);
+                      await refreshWorkspacesList();
+                    }}
                   />
                 )}
 
@@ -840,6 +856,13 @@ export default function App() {
           </div>
 
           <nav className="flex flex-wrap items-center justify-center gap-5 font-semibold">
+            <button
+              type="button"
+              onClick={() => setLogoModalOpen(true)}
+              className="text-cyan-700 dark:text-cyan-400 hover:underline whitespace-nowrap cursor-pointer"
+            >
+              Download Logo
+            </button>
             <a
               href="/upgrades"
               onClick={(e) => {
@@ -893,6 +916,8 @@ export default function App() {
           </nav>
         </div>
       </footer>
+
+      <BrandLogoModal isOpen={logoModalOpen} onClose={() => setLogoModalOpen(false)} />
     </div>
   );
 }

@@ -6,6 +6,7 @@ import {
   Download,
   ExternalLink,
   FileCode2,
+  FileText,
   Hammer,
   Loader2,
   Play,
@@ -18,6 +19,7 @@ import type { WorkspaceDetail } from '../types';
 import { apiFetch } from '../utils/api';
 import { formatBytes, formatDuration, getStatusDisplay } from '../utils/format';
 import { DatabaseBridgeCard } from './DatabaseBridgeCard';
+import { GoogleDriveExportCard } from './GoogleDriveExportCard';
 
 interface OverviewPanelProps {
   workspace: WorkspaceDetail;
@@ -28,6 +30,7 @@ interface OverviewPanelProps {
   onOpenFileInEditor: (path: string) => void;
   onSwitchSubProject: (subPath: string) => void;
   onRefreshWorkspace: () => Promise<void>;
+  onOpenDocsWorkflows: () => void;
 }
 
 export const OverviewPanel: React.FC<OverviewPanelProps> = ({
@@ -39,6 +42,7 @@ export const OverviewPanel: React.FC<OverviewPanelProps> = ({
   onOpenFileInEditor,
   onSwitchSubProject,
   onRefreshWorkspace,
+  onOpenDocsWorkflows,
 }) => {
   const [depFilter, setDepFilter] = useState<'all' | 'runtime' | 'dev'>('all');
   const [depSearch, setDepSearch] = useState('');
@@ -117,6 +121,15 @@ export const OverviewPanel: React.FC<OverviewPanelProps> = ({
               <ExternalLink className="w-3.5 h-3.5 text-slate-500" />
             </a>
 
+            <button
+              type="button"
+              onClick={onOpenDocsWorkflows}
+              className="h-10 px-3.5 rounded-lg border border-orange-300 dark:border-orange-500/50 bg-orange-50 dark:bg-orange-950/30 hover:bg-orange-100 dark:hover:bg-orange-900/40 text-orange-900 dark:text-orange-200 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <FileText className="w-3.5 h-3.5 text-orange-600 dark:text-orange-400" />
+              <span>README &amp; Workflows</span>
+            </button>
+
             <a
               href={`/api/workspaces/${workspace.id}/download?mode=project`}
               className="h-10 px-3.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
@@ -194,6 +207,12 @@ export const OverviewPanel: React.FC<OverviewPanelProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Full Project Google Drive Folder Uploader */}
+      <GoogleDriveExportCard
+        workspace={workspace}
+        onWorkspaceUpdated={onRefreshWorkspace}
+      />
 
       {/* Automated Post-Build Smoke Prober Report */}
       {workspace.smokeProbe && (
@@ -526,13 +545,18 @@ export const OverviewPanel: React.FC<OverviewPanelProps> = ({
           </div>
 
           <div className="border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] rounded-2xl overflow-hidden shadow-2xs">
-            <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
               <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
                 Repository Documentation
               </h2>
-              <span className="text-xs text-slate-500 dark:text-slate-400 font-mono">
-                README.md
-              </span>
+              <button
+                type="button"
+                onClick={onOpenDocsWorkflows}
+                className="text-xs font-semibold text-orange-600 dark:text-orange-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span>Generate README &amp; Workflows</span>
+              </button>
             </div>
             <div
               className="p-6 text-sm text-slate-700 dark:text-slate-300 leading-relaxed max-h-[540px] overflow-y-auto space-y-3 [&_h1]:text-xl [&_h1]:font-extrabold [&_h1]:text-slate-900 dark:[&_h1]:text-white [&_h1]:mb-3 [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-slate-900 dark:[&_h2]:text-slate-100 [&_h2]:mt-5 [&_h2]:mb-2 [&_h3]:text-sm [&_h3]:font-semibold [&_h3]:text-slate-800 dark:[&_h3]:text-slate-200 [&_a]:text-orange-600 dark:[&_a]:text-cyan-400 [&_a]:underline [&_code]:font-mono [&_code]:text-xs [&_code]:bg-slate-100 dark:[&_code]:bg-[#0B0F17] [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_pre]:bg-slate-900 [&_pre]:text-slate-100 [&_pre]:p-4 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre]:border [&_pre]:border-slate-800 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5"

@@ -264,3 +264,38 @@ export interface ContactTicket {
   createdAt: string;
 }
 
+export interface GeneratedDocFile {
+  path: string;
+  label: string;
+  kind: 'readme' | 'workflow';
+  description: string;
+  content: string;
+  existsOnDisk: boolean;
+}
+
+export interface GeneratedProjectDocsBundle {
+  workspaceId: string;
+  repoFullName: string;
+  branch: string;
+  generatedAt: string;
+  files: GeneratedDocFile[];
+}
+
+export interface GoogleDriveUploadResult {
+  folderId: string;
+  folderName: string;
+  folderUrl: string;
+  uploadedFilesCount: number;
+  uploadedFoldersCount: number;
+  totalBytesUploaded: number;
+  archiveFileName: string;
+  archiveFileUrl: string;
+  includedGeneratedDocs: boolean;
+  uploadedAt: string;
+  sampleFiles: Array<{
+    path: string;
+    webViewLink?: string;
+  }>;
+}
+
+

@@ -22,8 +22,35 @@ import firebaseConfig from '../../firebase-applet-config.json';
 import type { DetectedSchemaModel, WorkspaceDetail } from '../types';
 
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+const resolvedFirestoreDbId =
+  (firebaseConfig as { firestoreDatabaseId?: string }).firestoreDatabaseId ||
+  'ai-studio-tidyupsgoogleads-c1b71ce9-ff4f-47ca-90aa-1b084f857ab6';
+export const db = getFirestore(app, resolvedFirestoreDbId);
 export const auth = getAuth(app);
+
+export const GOOGLE_DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.file'];
+
+// Strictly cache Google Workspace OAuth access token in memory only (never in localStorage/sessionStorage)
+let isSigningInDrive = false;
+let cachedDriveAccessToken: string | null = null;
+const driveListeners = new Set<(state: { user: User | null; hasDriveToken: boolean }) => void>();
+
+function notifyDriveListeners() {
+  const payload = {
+    user: auth.currentUser,
+    hasDriveToken: Boolean(cachedDriveAccessToken),
+  };
+  for (const listener of driveListeners) {
+    listener(payload);
+  }
+}
+
+onAuthStateChanged(auth, (user) => {
+  if (!user && !isSigningInDrive) {
+    cachedDriveAccessToken = null;
+  }
+  notifyDriveListeners();
+});
 
 export enum OperationType {
   CREATE = 'create',
@@ -92,6 +119,55 @@ export function subscribeFirebaseUser(cb: (user: User | null) => void) {
   return onAuthStateChanged(auth, cb);
 }
 
+export function subscribeDriveAuthState(
+  cb: (state: { user: User | null; hasDriveToken: boolean }) => void
+) {
+  driveListeners.add(cb);
+  cb({
+    user: auth.currentUser,
+    hasDriveToken: Boolean(cachedDriveAccessToken),
+  });
+  return () => {
+    driveListeners.delete(cb);
+  };
+}
+
+export function getCachedDriveAccessToken(): string | null {
+  return cachedDriveAccessToken;
+}
+
+export function clearCachedDriveAccessToken(): void {
+  cachedDriveAccessToken = null;
+  notifyDriveListeners();
+}
+
+export async function signInWithGoogleForDrive(
+  forceAccountPicker = false
+): Promise<{ user: User; accessToken: string }> {
+  try {
+    isSigningInDrive = true;
+    const provider = new GoogleAuthProvider();
+    for (const scope of GOOGLE_DRIVE_SCOPES) {
+      provider.addScope(scope);
+    }
+    provider.setCustomParameters({
+      prompt: forceAccountPicker ? 'select_account consent' : 'consent',
+    });
+
+    const result = await signInWithPopup(auth, provider);
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    if (!credential?.accessToken) {
+      throw new Error('Google Sign-In succeeded, but no Google Drive access token was returned.');
+    }
+
+    cachedDriveAccessToken = credential.accessToken;
+    notifyDriveListeners();
+    return { user: result.user, accessToken: credential.accessToken };
+  } finally {
+    isSigningInDrive = false;
+  }
+}
+
 export async function signInWithGoogleFirebase(): Promise<User> {
   const provider = new GoogleAuthProvider();
   const cred = await signInWithPopup(auth, provider);
@@ -99,7 +175,9 @@ export async function signInWithGoogleFirebase(): Promise<User> {
 }
 
 export async function signOutFirebase(): Promise<void> {
+  cachedDriveAccessToken = null;
   await signOut(auth);
+  notifyDriveListeners();
 }
 
 export interface CloudSavedSnapshot {

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
   ChevronDown,
+  Download,
   FolderGit2,
   Github,
   Hammer,
@@ -37,6 +38,7 @@ interface RepoCommandBarProps {
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
   onOpenUpgrades: () => void;
+  onOpenLogoModal: () => void;
 }
 
 const VERIFIED_PRESETS = [
@@ -77,6 +79,7 @@ export const RepoCommandBar: React.FC<RepoCommandBarProps> = ({
   theme,
   onToggleTheme,
   onOpenUpgrades,
+  onOpenLogoModal,
 }) => {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const busy = isImporting || isBuilding;
@@ -217,6 +220,15 @@ export const RepoCommandBar: React.FC<RepoCommandBarProps> = ({
                 </div>
               </div>
             )}
+
+            <button
+              type="button"
+              onClick={onOpenLogoModal}
+              className="h-8 px-3 rounded-md border border-cyan-300 dark:border-cyan-600/50 bg-cyan-50 dark:bg-cyan-950/30 hover:bg-cyan-100 dark:hover:bg-cyan-900/40 text-cyan-900 dark:text-cyan-200 font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400" />
+              <span>Download Logo</span>
+            </button>
 
             <button
               type="button"
