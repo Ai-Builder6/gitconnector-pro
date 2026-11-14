@@ -150,14 +150,14 @@ export const CodeConfigPanel: React.FC<CodeConfigPanelProps> = ({
     <div className="space-y-6">
       {/* Sub-mode Switcher */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-1 p-1 bg-[#111827] border border-slate-800 rounded-lg w-fit">
+        <div className="flex items-center gap-1 p-1 bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 rounded-xl w-fit">
           <button
             type="button"
             onClick={() => setSubView('code')}
-            className={`px-3.5 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               subView === 'code'
-                ? 'bg-slate-800 text-white'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'bg-orange-500 text-white shadow-2xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
             Source Inspector &amp; Live Editor
@@ -165,17 +165,17 @@ export const CodeConfigPanel: React.FC<CodeConfigPanelProps> = ({
           <button
             type="button"
             onClick={() => setSubView('env')}
-            className={`px-3.5 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               subView === 'env'
-                ? 'bg-slate-800 text-white'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'bg-orange-500 text-white shadow-2xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
             Environment Variables ({envDraft.length})
           </button>
         </div>
 
-        <div className="text-xs text-slate-400">
+        <div className="text-xs text-slate-500 dark:text-slate-400">
           Edits write directly to the sandboxed clone on disk — save any file and click Rebuild to recompile.
         </div>
       </div>
@@ -183,35 +183,38 @@ export const CodeConfigPanel: React.FC<CodeConfigPanelProps> = ({
       {subView === 'code' ? (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
           {/* File Explorer */}
-          <div className="lg:col-span-4 border border-slate-800 bg-[#111827] rounded-xl flex flex-col h-[640px] overflow-hidden">
-            <div className="p-3.5 border-b border-slate-800 space-y-2.5">
+          <div className="lg:col-span-4 border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] rounded-2xl flex flex-col h-[640px] overflow-hidden shadow-2xs">
+            <div className="p-3.5 border-b border-slate-200 dark:border-slate-800 space-y-2.5">
               <div className="relative">
-                <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
                   value={fileFilter}
                   onChange={(e) => setFileFilter(e.target.value)}
                   placeholder="Search files by path..."
-                  className="w-full h-8 pl-8 pr-3 rounded-md bg-[#0B0F17] border border-slate-800 text-xs text-slate-200 placeholder-slate-500 font-mono focus:outline-none focus:border-blue-500"
+                  className="w-full h-8 pl-8 pr-3 rounded-lg bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-slate-200 placeholder-slate-400 font-mono focus:outline-none focus:border-orange-500"
                 />
               </div>
 
               {workspace.targetSubPath && (
-                <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer select-none">
+                <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400 cursor-pointer select-none">
                   <input
                     type="checkbox"
                     checked={scopeToTarget}
                     onChange={(e) => setScopeToTarget(e.target.checked)}
-                    className="rounded border-slate-700 bg-slate-900 text-blue-600"
+                    className="rounded border-slate-300 dark:border-slate-700 accent-orange-500"
                   />
                   <span className="truncate">
-                    Scope to <code className="text-slate-200">{workspace.targetSubPath}</code>
+                    Scope to{' '}
+                    <code className="text-orange-600 dark:text-slate-200 font-semibold">
+                      {workspace.targetSubPath}
+                    </code>
                   </span>
                 </label>
               )}
             </div>
 
-            <div className="flex-1 overflow-y-auto divide-y divide-slate-800/50">
+            <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/50">
               {visibleFiles.length === 0 ? (
                 <div className="p-6 text-center text-xs text-slate-500">
                   No matching files found.
@@ -235,15 +238,15 @@ export const CodeConfigPanel: React.FC<CodeConfigPanelProps> = ({
                       onClick={() => void loadFile(file.path)}
                       className={`w-full px-3.5 py-2 text-left flex items-center justify-between gap-2 text-xs transition-colors cursor-pointer ${
                         active
-                          ? 'bg-blue-950/40 text-white'
-                          : 'text-slate-300 hover:bg-slate-800/50'
+                          ? 'bg-orange-50 dark:bg-orange-950/30 text-orange-950 dark:text-white font-semibold'
+                          : 'text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/50'
                       }`}
                     >
                       <span className="flex items-center gap-2 min-w-0">
                         {isCode ? (
-                          <FileCode className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                          <FileCode className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400 shrink-0" />
                         ) : file.type === 'dir' ? (
-                          <Folder className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <Folder className="w-3.5 h-3.5 text-amber-500 shrink-0" />
                         ) : (
                           <FileText className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                         )}
@@ -251,7 +254,7 @@ export const CodeConfigPanel: React.FC<CodeConfigPanelProps> = ({
                           {displayPath}
                         </span>
                       </span>
-                      <span className="font-mono tabular-nums text-[11px] text-slate-500 shrink-0">
+                      <span className="font-mono tabular-nums text-[11px] text-slate-400 dark:text-slate-500 shrink-0">
                         {formatBytes(file.size)}
                       </span>
                     </button>
@@ -262,19 +265,19 @@ export const CodeConfigPanel: React.FC<CodeConfigPanelProps> = ({
           </div>
 
           {/* Code Editor */}
-          <div className="lg:col-span-8 border border-slate-800 bg-[#111827] rounded-xl flex flex-col h-[640px] overflow-hidden">
-            <div className="px-4 py-3 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3">
+          <div className="lg:col-span-8 border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] rounded-2xl flex flex-col h-[640px] overflow-hidden shadow-2xs">
+            <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-2 min-w-0">
-                <span className="font-mono text-xs text-slate-200 truncate">
+                <span className="font-mono text-xs font-semibold text-slate-900 dark:text-slate-200 truncate">
                   {selectedPath || 'Select a file to inspect'}
                 </span>
                 {isDirty && (
-                  <span className="text-xs text-amber-400 whitespace-nowrap shrink-0">
+                  <span className="text-xs font-medium text-amber-600 dark:text-amber-400 whitespace-nowrap shrink-0">
                     · Unsaved changes
                   </span>
                 )}
                 {savedNotice && (
-                  <span className="text-xs text-emerald-400 whitespace-nowrap shrink-0">
+                  <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400 whitespace-nowrap shrink-0">
                     · Saved to disk
                   </span>
                 )}
@@ -289,9 +292,13 @@ export const CodeConfigPanel: React.FC<CodeConfigPanelProps> = ({
                       setCopiedCode(true);
                       setTimeout(() => setCopiedCode(false), 1500);
                     }}
-                    className="h-8 px-2.5 rounded-md border border-slate-700 bg-slate-800/60 hover:bg-slate-800 text-xs text-slate-300 inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                    className="h-8 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-300 inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                   >
-                    {copiedCode ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copiedCode ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" />
+                    )}
                     <span>{copiedCode ? 'Copied' : 'Copy'}</span>
                   </button>
 
@@ -299,9 +306,13 @@ export const CodeConfigPanel: React.FC<CodeConfigPanelProps> = ({
                     type="button"
                     disabled={!isDirty || savingFile}
                     onClick={() => void handleSaveFile(false)}
-                    className="h-8 px-3 rounded-md border border-slate-700 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-xs font-medium text-slate-100 inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                    className="h-8 px-3 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-40 text-xs font-semibold text-slate-800 dark:text-slate-100 inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                   >
-                    {savingFile ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                    {savingFile ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Save className="w-3.5 h-3.5 text-cyan-600" />
+                    )}
                     <span>Save</span>
                   </button>
 
@@ -309,7 +320,7 @@ export const CodeConfigPanel: React.FC<CodeConfigPanelProps> = ({
                     type="button"
                     disabled={savingFile || isBuilding}
                     onClick={() => void handleSaveFile(true)}
-                    className="h-8 px-3 rounded-md bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-xs font-semibold text-white inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                    className="h-8 px-3 rounded-lg bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-xs font-semibold text-white inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                   >
                     <Hammer className="w-3.5 h-3.5" />
                     <span>Save &amp; Rebuild</span>
@@ -318,10 +329,10 @@ export const CodeConfigPanel: React.FC<CodeConfigPanelProps> = ({
               )}
             </div>
 
-            <div className="flex-1 bg-[#0B0F17] relative overflow-hidden">
+            <div className="flex-1 bg-slate-50/70 dark:bg-[#0B0F17] relative overflow-hidden">
               {loadingFile ? (
-                <div className="h-full flex items-center justify-center gap-2 text-xs text-slate-400">
-                  <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
+                <div className="h-full flex items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                  <Loader2 className="w-4 h-4 animate-spin text-orange-500" />
                   <span>Loading source file...</span>
                 </div>
               ) : selectedPath ? (
@@ -329,7 +340,7 @@ export const CodeConfigPanel: React.FC<CodeConfigPanelProps> = ({
                   value={editorContent}
                   onChange={(e) => setEditorContent(e.target.value)}
                   spellCheck={false}
-                  className="w-full h-full p-4 bg-transparent text-slate-200 font-mono text-xs leading-relaxed resize-none focus:outline-none"
+                  className="w-full h-full p-4 bg-transparent text-slate-900 dark:text-slate-200 font-mono text-xs leading-relaxed resize-none focus:outline-none"
                 />
               ) : (
                 <div className="h-full flex items-center justify-center text-xs text-slate-500">
@@ -341,13 +352,13 @@ export const CodeConfigPanel: React.FC<CodeConfigPanelProps> = ({
         </div>
       ) : (
         /* Environment Variable Configurator */
-        <div className="border border-slate-800 bg-[#111827] rounded-xl overflow-hidden">
-          <div className="px-6 py-4 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] rounded-2xl overflow-hidden shadow-2xs">
+          <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
-              <h2 className="text-sm font-semibold text-slate-100">
+              <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
                 Build &amp; Runtime Environment (.env)
               </h2>
-              <p className="text-xs text-slate-400 mt-0.5">
+              <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
                 Keys extracted from <code>.env.example</code> and static source code analysis. Values are injected during project builds.
               </p>
             </div>
@@ -357,18 +368,22 @@ export const CodeConfigPanel: React.FC<CodeConfigPanelProps> = ({
                 onClick={() =>
                   setEnvDraft((prev) => [...prev, { key: '', value: '', source: 'custom' }])
                 }
-                className="h-9 px-3 rounded-lg border border-slate-700 bg-slate-800/70 hover:bg-slate-800 text-xs font-medium text-slate-200 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+                className="h-9 px-3 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold text-slate-800 dark:text-slate-200 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
               >
-                <Plus className="w-3.5 h-3.5" />
+                <Plus className="w-3.5 h-3.5 text-cyan-600" />
                 <span>Add Variable</span>
               </button>
               <button
                 type="button"
                 disabled={savingEnv}
                 onClick={() => void handleSaveEnv()}
-                className="h-9 px-4 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-xs font-semibold text-white inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+                className="h-9 px-4 rounded-lg bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-xs font-semibold text-white inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
               >
-                {savingEnv ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                {savingEnv ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Save className="w-3.5 h-3.5" />
+                )}
                 <span>{envSavedNotice ? 'Saved!' : 'Save Environment'}</span>
               </button>
             </div>
@@ -376,7 +391,7 @@ export const CodeConfigPanel: React.FC<CodeConfigPanelProps> = ({
 
           {envDraft.length === 0 ? (
             <div className="px-6 py-10 text-center space-y-3">
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-slate-500 dark:text-slate-400">
                 No required environment variables were detected in this repository.
               </p>
               <button
@@ -384,16 +399,19 @@ export const CodeConfigPanel: React.FC<CodeConfigPanelProps> = ({
                 onClick={() =>
                   setEnvDraft([{ key: 'VITE_API_URL', value: '', source: 'custom' }])
                 }
-                className="px-3.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 font-medium inline-flex items-center gap-1.5 cursor-pointer"
+                className="px-3.5 py-2 rounded-lg bg-orange-500 hover:bg-orange-600 text-xs text-white font-semibold inline-flex items-center gap-1.5 cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Add First Variable</span>
               </button>
             </div>
           ) : (
-            <div className="divide-y divide-slate-800">
+            <div className="divide-y divide-slate-100 dark:divide-slate-800">
               {envDraft.map((item, idx) => (
-                <div key={idx} className="px-6 py-3 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                <div
+                  key={idx}
+                  className="px-6 py-3 flex flex-col sm:flex-row items-stretch sm:items-center gap-3"
+                >
                   <input
                     type="text"
                     value={item.key}
@@ -404,7 +422,7 @@ export const CodeConfigPanel: React.FC<CodeConfigPanelProps> = ({
                       );
                     }}
                     placeholder="VARIABLE_NAME"
-                    className="sm:w-64 h-9 px-3 rounded-md bg-[#0B0F17] border border-slate-800 font-mono text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-blue-500"
+                    className="sm:w-64 h-9 px-3 rounded-lg bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 font-mono text-xs text-slate-900 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-orange-500"
                   />
                   <input
                     type="text"
@@ -416,7 +434,7 @@ export const CodeConfigPanel: React.FC<CodeConfigPanelProps> = ({
                       );
                     }}
                     placeholder="Value (injected at build time)"
-                    className="flex-1 h-9 px-3 rounded-md bg-[#0B0F17] border border-slate-800 font-mono text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-blue-500"
+                    className="flex-1 h-9 px-3 rounded-lg bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 font-mono text-xs text-slate-900 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-orange-500"
                   />
                   <span className="text-xs text-slate-500 sm:w-24 text-right shrink-0">
                     {item.source}
@@ -424,7 +442,7 @@ export const CodeConfigPanel: React.FC<CodeConfigPanelProps> = ({
                   <button
                     type="button"
                     onClick={() => setEnvDraft((prev) => prev.filter((_, i) => i !== idx))}
-                    className="p-2 text-slate-500 hover:text-rose-400 transition-colors self-end sm:self-center cursor-pointer"
+                    className="p-2 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 transition-colors self-end sm:self-center cursor-pointer"
                     title="Remove variable"
                   >
                     <Trash2 className="w-4 h-4" />

@@ -19,6 +19,7 @@ import type {
   WorkspaceSummary,
 } from './types';
 import { apiFetch, setStoredGitHubSessionId } from './utils/api';
+import { BrandLogo } from './components/BrandLogo';
 import { RepoCommandBar } from './components/RepoCommandBar';
 import { GitHubRepoDrawer } from './components/GitHubRepoDrawer';
 import { OverviewPanel } from './components/OverviewPanel';
@@ -26,10 +27,45 @@ import { CodeConfigPanel } from './components/CodeConfigPanel';
 import { BuildConsolePanel } from './components/BuildConsolePanel';
 import { LivePreviewPanel } from './components/LivePreviewPanel';
 import { BranchDiffPanel } from './components/BranchDiffPanel';
+import { SuggestedUpgradesView } from './components/SuggestedUpgradesView';
+import {
+  ContactPage,
+  PrivacyPage,
+  SupportPage,
+  TermsPage,
+} from './components/LegalAndSupportPages';
 
 type NavTab = 'overview' | 'code' | 'build' | 'preview' | 'diff';
+type RouteView = 'studio' | 'upgrades' | 'support' | 'privacy' | 'contact' | 'terms';
+
+function resolveRouteFromPathname(pathname: string): RouteView {
+  let clean = pathname;
+  try {
+    clean = decodeURIComponent(pathname);
+  } catch {
+    clean = pathname;
+  }
+  const lower = clean.replace(/\/+$/, '').toLowerCase();
+  if (lower === '/upgrades' || lower === '/updates' || lower === '/addons') return 'upgrades';
+  if (lower === '/support') return 'support';
+  if (lower === '/privacy') return 'privacy';
+  if (lower === '/contact') return 'contact';
+  if (lower === '/t&c' || lower === '/terms') return 'terms';
+  return 'studio';
+}
 
 export default function App() {
+  const [routeView, setRouteView] = useState<RouteView>(() =>
+    resolveRouteFromPathname(window.location.pathname)
+  );
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    try {
+      return localStorage.getItem('rf_theme') === 'dark' ? 'dark' : 'light';
+    } catch {
+      return 'light';
+    }
+  });
+
   const [activeTab, setActiveTab] = useState<NavTab>('overview');
   const [repoInput, setRepoInput] = useState('https://github.com/gabrielecirulli/2048');
   const [branchInput, setBranchInput] = useState('');
@@ -57,6 +93,36 @@ export default function App() {
   });
 
   const bootCheckedRef = useRef(false);
+
+  // Sync theme class onto <html>
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+    try {
+      localStorage.setItem('rf_theme', theme);
+    } catch {
+      // Ignore storage restrictions
+    }
+  }, [theme]);
+
+  // Browser back/forward routing listener
+  useEffect(() => {
+    const onPopState = () => {
+      setRouteView(resolveRouteFromPathname(window.location.pathname));
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  const navigateTo = useCallback((path: string, targetTab?: NavTab) => {
+    if (window.location.pathname !== path) {
+      window.history.pushState({}, '', path);
+    }
+    setRouteView(resolveRouteFromPathname(path));
+    if (targetTab) {
+      setActiveTab(targetTab);
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, []);
 
   const refreshGitHubAuth = useCallback(async () => {
     try {
@@ -227,7 +293,9 @@ export default function App() {
       }
       const popup = window.open(payload.url, 'github_oauth_popup', 'width=600,height=700');
       if (!popup) {
-        setOauthNotice('Browser blocked the OAuth popup. Allow popups for this site and click Connect again.');
+        setOauthNotice(
+          'Browser blocked the OAuth popup. Allow popups for this site and click Connect again.'
+        );
       }
     } catch {
       setOauthNotice('Unable to initiate GitHub OAuth flow.');
@@ -300,7 +368,7 @@ export default function App() {
     if (!activeWorkspace) return;
     setErrorBanner(null);
     setRuntimeEvents([]);
-    setActiveTab('build');
+    navigateTo('/', 'build');
 
     try {
       const res = await apiFetch(`/api/workspaces/${activeWorkspace.id}/build`, {
@@ -387,15 +455,15 @@ export default function App() {
           className="w-full h-full border-0 flex-1"
         />
 
-        <div className="fixed bottom-4 right-4 z-50 flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#0B0F17]/95 border border-slate-700 shadow-xl text-xs text-slate-200">
-          <span className="font-mono text-slate-300 mr-1 max-w-44 truncate">
+        <div className="fixed bottom-4 right-4 z-50 flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/95 dark:bg-[#0B0F17]/95 border border-slate-200 dark:border-slate-700 shadow-xl text-xs text-slate-800 dark:text-slate-200">
+          <span className="font-mono font-semibold text-slate-900 dark:text-slate-300 mr-1 max-w-44 truncate">
             {activeWorkspace.owner}/{activeWorkspace.repoName}
           </span>
           <button
             type="button"
             onClick={() => setFullScreenReloadKey((k) => k + 1)}
             title="Reload application"
-            className="p-1.5 rounded-md hover:bg-slate-800 text-slate-300 hover:text-white transition-colors cursor-pointer"
+            className="p-1.5 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors cursor-pointer"
           >
             <RotateCcw className="w-3.5 h-3.5" />
           </button>
@@ -403,17 +471,17 @@ export default function App() {
             type="button"
             onClick={() => {
               setFullScreenApp(false);
-              setActiveTab('code');
+              navigateTo('/', 'code');
             }}
             title="Edit source code"
-            className="p-1.5 rounded-md hover:bg-slate-800 text-slate-300 hover:text-white transition-colors cursor-pointer"
+            className="p-1.5 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors cursor-pointer"
           >
             <Code2 className="w-3.5 h-3.5" />
           </button>
           <button
             type="button"
             onClick={() => setFullScreenApp(false)}
-            className="px-2.5 py-1 rounded-md bg-blue-600 hover:bg-blue-500 text-white font-medium inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="px-2.5 py-1 rounded-md bg-orange-500 hover:bg-orange-600 text-white font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <Minimize2 className="w-3.5 h-3.5" />
             <span>Studio Inspector</span>
@@ -423,7 +491,7 @@ export default function App() {
     );
   }
 
-  const navItems: Array<{ id: NavTab; label: string }> = [
+  const studioTabs: Array<{ id: NavTab; label: string }> = [
     { id: 'overview', label: 'Overview' },
     { id: 'code', label: 'Code & Env' },
     { id: 'build', label: 'Build & API' },
@@ -431,41 +499,84 @@ export default function App() {
     { id: 'diff', label: 'Branch Diff' },
   ];
 
+  const topNavLinks: Array<{
+    key: string;
+    label: string;
+    href: string;
+    isActive: boolean;
+    onSelect: () => void;
+  }> = [
+    {
+      key: 'workspace',
+      label: 'Workspace',
+      href: '/',
+      isActive: routeView === 'studio' && activeTab !== 'diff',
+      onSelect: () => navigateTo('/', activeTab === 'diff' ? 'overview' : activeTab),
+    },
+    {
+      key: 'diff',
+      label: 'Branch Diff',
+      href: '/',
+      isActive: routeView === 'studio' && activeTab === 'diff',
+      onSelect: () => navigateTo('/', 'diff'),
+    },
+    {
+      key: 'upgrades',
+      label: 'Suggested Upgrades',
+      href: '/upgrades',
+      isActive: routeView === 'upgrades',
+      onSelect: () => navigateTo('/upgrades'),
+    },
+    {
+      key: 'support',
+      label: 'Support',
+      href: '/support',
+      isActive: routeView === 'support',
+      onSelect: () => navigateTo('/support'),
+    },
+    {
+      key: 'contact',
+      label: 'Contact',
+      href: '/contact',
+      isActive: routeView === 'contact',
+      onSelect: () => navigateTo('/contact'),
+    },
+  ];
+
   return (
-    <div className="min-h-screen bg-[#0B0F17] text-slate-100 flex flex-col">
+    <div className="min-h-screen bg-[#F8FAFC] dark:bg-[#0B0F17] text-slate-900 dark:text-slate-100 flex flex-col">
+      {/* Vibrant Top Accent Hairline */}
+      <div className="h-1 w-full bg-gradient-to-r from-orange-500 via-amber-400 to-cyan-500 shrink-0" />
+
       {/* Strict 3-Zone Top Bar Contract */}
-      <header className="flex items-center justify-between gap-8 px-6 h-14 border-b border-slate-800 bg-[#0B0F17] sticky top-0 z-30">
-        {/* Zone 1: Single-element Brand Wordmark */}
-        <a
-          href="#top"
+      <header className="flex items-center justify-between gap-8 px-6 h-15 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-[#0B0F17]/95 backdrop-blur-xs sticky top-0 z-30">
+        {/* Zone 1: Custom Brand Logo */}
+        <BrandLogo
           onClick={(e) => {
             e.preventDefault();
-            setActiveTab('overview');
+            navigateTo('/', 'overview');
           }}
-          className="text-base font-bold tracking-tight text-white whitespace-nowrap shrink-0"
-        >
-          RepoForge Studio
-        </a>
+        />
 
         {/* Zone 2: 5 Clean Single-Line Navigation Links */}
-        <nav className="hidden md:flex items-center gap-6 text-sm font-medium">
-          {navItems.map((item) => {
-            const active = activeTab === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setActiveTab(item.id)}
-                className={`py-4 border-b-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                  active
-                    ? 'border-blue-500 text-white'
-                    : 'border-transparent text-slate-400 hover:text-slate-100'
-                }`}
-              >
-                {item.label}
-              </button>
-            );
-          })}
+        <nav className="hidden md:flex items-center gap-6 text-sm font-semibold">
+          {topNavLinks.map((link) => (
+            <a
+              key={link.key}
+              href={link.href}
+              onClick={(e) => {
+                e.preventDefault();
+                link.onSelect();
+              }}
+              className={`py-4 border-b-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                link.isActive
+                  ? 'border-orange-500 text-orange-600 dark:text-white'
+                  : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+              }`}
+            >
+              {link.label}
+            </a>
+          ))}
         </nav>
 
         {/* Zone 3: 1 Primary Action */}
@@ -474,7 +585,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setFullScreenApp(true)}
-              className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 rounded-lg inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="px-4 py-2 text-xs font-semibold text-white bg-orange-500 hover:bg-orange-600 rounded-lg inline-flex items-center gap-1.5 shadow-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Play className="w-3.5 h-3.5" />
               <span>Launch Full App</span>
@@ -484,7 +595,7 @@ export default function App() {
               type="button"
               disabled={!activeWorkspace || isBuilding || isImporting}
               onClick={() => void handleTriggerBuild(false)}
-              className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded-lg inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="px-4 py-2 text-xs font-semibold text-white bg-orange-500 hover:bg-orange-600 disabled:opacity-50 rounded-lg inline-flex items-center gap-1.5 shadow-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Hammer className="w-3.5 h-3.5" />
               <span>{isBuilding ? 'Building...' : 'Build Project'}</span>
@@ -494,169 +605,292 @@ export default function App() {
       </header>
 
       {/* Mobile Navigation */}
-      <div className="md:hidden flex items-center gap-4 px-6 py-2.5 border-b border-slate-800 bg-[#0E131F] overflow-x-auto text-xs font-medium">
-        {navItems.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => setActiveTab(item.id)}
+      <div className="md:hidden flex items-center gap-4 px-6 py-2.5 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0E131F] overflow-x-auto text-xs font-semibold">
+        {topNavLinks.map((link) => (
+          <a
+            key={link.key}
+            href={link.href}
+            onClick={(e) => {
+              e.preventDefault();
+              link.onSelect();
+            }}
             className={`whitespace-nowrap shrink-0 cursor-pointer ${
-              activeTab === item.id ? 'text-blue-400 font-semibold' : 'text-slate-400'
+              link.isActive
+                ? 'text-orange-600 dark:text-orange-400'
+                : 'text-slate-600 dark:text-slate-400'
             }`}
           >
-            {item.label}
-          </button>
+            {link.label}
+          </a>
         ))}
       </div>
 
-      {/* Repository URL Paste & Workspace Switcher Bar */}
-      <RepoCommandBar
-        repoInput={repoInput}
-        onRepoInputChange={setRepoInput}
-        branchInput={branchInput}
-        onBranchInputChange={setBranchInput}
-        isImporting={isImporting}
-        isBuilding={Boolean(isBuilding)}
-        onImport={(autoBuild, overrideUrl, overrideBranch) =>
-          void handleImport(autoBuild, overrideUrl, overrideBranch)
-        }
-        workspaces={workspaces}
-        activeWorkspace={activeWorkspace}
-        onSelectWorkspace={(id) => {
-          setErrorBanner(null);
-          setRuntimeEvents([]);
-          void loadWorkspaceDetail(id);
-        }}
-        onDeleteWorkspace={(id) => void handleDeleteWorkspace(id)}
-        onSwitchSubProject={(sp) => void handleSwitchSubProject(sp)}
-        githubAuth={githubAuth}
-        githubDrawerOpen={githubDrawerOpen}
-        onToggleGithubDrawer={() => setGithubDrawerOpen((v) => !v)}
-      />
+      {/* Studio Workspace Command Bar (shown on Studio route) */}
+      {routeView === 'studio' && (
+        <>
+          <RepoCommandBar
+            repoInput={repoInput}
+            onRepoInputChange={setRepoInput}
+            branchInput={branchInput}
+            onBranchInputChange={setBranchInput}
+            isImporting={isImporting}
+            isBuilding={Boolean(isBuilding)}
+            onImport={(autoBuild, overrideUrl, overrideBranch) =>
+              void handleImport(autoBuild, overrideUrl, overrideBranch)
+            }
+            workspaces={workspaces}
+            activeWorkspace={activeWorkspace}
+            onSelectWorkspace={(id) => {
+              setErrorBanner(null);
+              setRuntimeEvents([]);
+              void loadWorkspaceDetail(id);
+            }}
+            onDeleteWorkspace={(id) => void handleDeleteWorkspace(id)}
+            onSwitchSubProject={(sp) => void handleSwitchSubProject(sp)}
+            githubAuth={githubAuth}
+            githubDrawerOpen={githubDrawerOpen}
+            onToggleGithubDrawer={() => setGithubDrawerOpen((v) => !v)}
+            theme={theme}
+            onToggleTheme={() => setTheme((prev) => (prev === 'light' ? 'dark' : 'light'))}
+            onOpenUpgrades={() => navigateTo('/upgrades')}
+          />
 
-      {/* Collapsible GitHub OAuth & Private Repository Browser */}
-      {githubDrawerOpen && (
-        <GitHubRepoDrawer
-          authStatus={githubAuth}
-          onConnectClick={() => void handleConnectGitHub()}
-          onDisconnectClick={() => void handleDisconnectGitHub()}
-          onSelectRepoAndClone={(url, branch, autoBuild) => {
-            setRepoInput(url);
-            if (branch) setBranchInput(branch);
-            void handleImport(Boolean(autoBuild), url, branch);
-          }}
-          onClose={() => setGithubDrawerOpen(false)}
-          oauthNotice={oauthNotice}
-        />
+          {githubDrawerOpen && (
+            <GitHubRepoDrawer
+              authStatus={githubAuth}
+              onConnectClick={() => void handleConnectGitHub()}
+              onDisconnectClick={() => void handleDisconnectGitHub()}
+              onSelectRepoAndClone={(url, branch, autoBuild) => {
+                setRepoInput(url);
+                if (branch) setBranchInput(branch);
+                void handleImport(Boolean(autoBuild), url, branch);
+              }}
+              onClose={() => setGithubDrawerOpen(false)}
+              oauthNotice={oauthNotice}
+            />
+          )}
+
+          {/* Studio Sub-View Switcher */}
+          <div className="border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0B0F17]">
+            <div className="max-w-[1440px] mx-auto px-6 flex items-center gap-6 overflow-x-auto text-xs font-semibold">
+              {studioTabs.map((tab) => {
+                const active = activeTab === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`py-3 border-b-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                      active
+                        ? 'border-cyan-500 text-cyan-700 dark:text-cyan-400'
+                        : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </>
       )}
 
       {/* Main Content Canvas */}
       <main className="flex-1 max-w-[1440px] w-full mx-auto px-6 py-8">
-        {errorBanner && (
-          <div className="mb-6 p-4 rounded-xl border border-rose-500/40 bg-rose-950/30 text-rose-200 flex items-start justify-between gap-4 text-xs">
-            <div className="flex items-start gap-2.5">
-              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-              <div>
-                <div className="font-semibold text-rose-200">Operation Failed</div>
-                <p className="text-rose-300/90 mt-0.5">{errorBanner}</p>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setErrorBanner(null)}
-              className="text-rose-300 hover:text-white shrink-0 cursor-pointer"
-            >
-              Dismiss
-            </button>
-          </div>
-        )}
-
-        {activeTab === 'diff' ? (
-          <BranchDiffPanel
+        {routeView === 'upgrades' ? (
+          <SuggestedUpgradesView onNavigate={(p) => navigateTo(p)} />
+        ) : routeView === 'support' ? (
+          <SupportPage onNavigate={(p) => navigateTo(p)} />
+        ) : routeView === 'privacy' ? (
+          <PrivacyPage
+            onNavigate={(p) => navigateTo(p)}
             workspaces={workspaces}
-            activeWorkspace={activeWorkspace}
-            onWorkspacesCreated={async () => {
+            onWorkspacesPurged={async () => {
               await refreshWorkspacesList();
+              await refreshGitHubAuth();
+              setActiveWorkspace(null);
+              setLogs([]);
+              setApiLogs([]);
             }}
           />
-        ) : !activeWorkspace ? (
-          <div className="border border-slate-800 bg-[#111827] rounded-xl p-12 text-center max-w-2xl mx-auto my-8 space-y-4">
-            <h2 className="text-lg font-semibold text-white">
-              {isImporting
-                ? 'Cloning & Indexing GitHub Repository...'
-                : 'Paste Any GitHub Repository Above to Start'}
-            </h2>
-            <p className="text-sm text-slate-400 leading-relaxed">
-              {isImporting
-                ? 'Running git clone --depth 1 on the backend, analyzing package manifests, and preparing the workspace.'
-                : 'Enter a public or private GitHub URL to inspect its source tree, edit files, compile production bundles, test backend APIs, compare branches, and run the live application.'}
-            </p>
-          </div>
+        ) : routeView === 'contact' ? (
+          <ContactPage onNavigate={(p) => navigateTo(p)} workspaces={workspaces} />
+        ) : routeView === 'terms' ? (
+          <TermsPage onNavigate={(p) => navigateTo(p)} />
         ) : (
           <>
-            {activeTab === 'overview' && (
-              <OverviewPanel
-                workspace={activeWorkspace}
-                isBuilding={Boolean(isBuilding)}
-                onTriggerBuild={(clean) => void handleTriggerBuild(clean)}
-                onOpenPreview={() => setActiveTab('preview')}
-                onMountFullApp={() => setFullScreenApp(true)}
-                onOpenFileInEditor={(filePath) => {
-                  setEditorTargetFile(filePath);
-                  setActiveTab('code');
-                }}
-                onSwitchSubProject={(sp) => void handleSwitchSubProject(sp)}
-                onRefreshWorkspace={async () => {
-                  await loadWorkspaceDetail(activeWorkspace.id);
-                }}
-              />
+            {errorBanner && (
+              <div className="mb-6 p-4 rounded-xl border border-rose-300 dark:border-rose-500/40 bg-rose-50 dark:bg-rose-950/30 text-rose-800 dark:text-rose-200 flex items-start justify-between gap-4 text-xs">
+                <div className="flex items-start gap-2.5">
+                  <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-bold">Operation Failed</div>
+                    <p className="mt-0.5">{errorBanner}</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setErrorBanner(null)}
+                  className="text-rose-700 dark:text-rose-300 hover:underline shrink-0 cursor-pointer font-semibold"
+                >
+                  Dismiss
+                </button>
+              </div>
             )}
 
-            {activeTab === 'code' && (
-              <CodeConfigPanel
-                workspace={activeWorkspace}
-                initialFilePath={editorTargetFile}
-                isBuilding={Boolean(isBuilding)}
-                onSaveEnvVars={handleSaveEnvVars}
-                onTriggerBuild={() => void handleTriggerBuild(false)}
-              />
-            )}
-
-            {activeTab === 'build' && (
-              <BuildConsolePanel
-                workspace={activeWorkspace}
-                logs={logs}
-                apiLogs={apiLogs}
-                buildOptions={buildOptions}
-                onChangeBuildOptions={setBuildOptions}
-                onTriggerBuild={() => void handleTriggerBuild(false)}
-                onOpenPreview={() => setActiveTab('preview')}
-                onMountFullApp={() => setFullScreenApp(true)}
-                onRefreshWorkspace={async () => {
-                  await loadWorkspaceDetail(activeWorkspace.id);
+            {activeTab === 'diff' ? (
+              <BranchDiffPanel
+                workspaces={workspaces}
+                activeWorkspace={activeWorkspace}
+                onWorkspacesCreated={async () => {
                   await refreshWorkspacesList();
                 }}
               />
-            )}
+            ) : !activeWorkspace ? (
+              <div className="border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] rounded-2xl p-12 text-center max-w-2xl mx-auto my-8 space-y-4 shadow-2xs">
+                <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+                  {isImporting
+                    ? 'Cloning & Indexing GitHub Repository...'
+                    : 'Paste Any GitHub Repository Above to Start'}
+                </h2>
+                <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+                  {isImporting
+                    ? 'Running git clone --depth 1 on the backend, analyzing package manifests, and preparing the workspace.'
+                    : 'Enter a public or private GitHub URL to inspect its source tree, edit files, compile production bundles, test backend APIs, compare branches, and run the live application.'}
+                </p>
+              </div>
+            ) : (
+              <>
+                {activeTab === 'overview' && (
+                  <OverviewPanel
+                    workspace={activeWorkspace}
+                    isBuilding={Boolean(isBuilding)}
+                    onTriggerBuild={(clean) => void handleTriggerBuild(clean)}
+                    onOpenPreview={() => setActiveTab('preview')}
+                    onMountFullApp={() => setFullScreenApp(true)}
+                    onOpenFileInEditor={(filePath) => {
+                      setEditorTargetFile(filePath);
+                      setActiveTab('code');
+                    }}
+                    onSwitchSubProject={(sp) => void handleSwitchSubProject(sp)}
+                    onRefreshWorkspace={async () => {
+                      await loadWorkspaceDetail(activeWorkspace.id);
+                    }}
+                  />
+                )}
 
-            {activeTab === 'preview' && (
-              <LivePreviewPanel
-                workspace={activeWorkspace}
-                isBuilding={Boolean(isBuilding)}
-                runtimeEvents={runtimeEvents}
-                onClearRuntimeEvents={() => setRuntimeEvents([])}
-                onTriggerBuild={() => void handleTriggerBuild(false)}
-                onMountFullApp={() => setFullScreenApp(true)}
-              />
+                {activeTab === 'code' && (
+                  <CodeConfigPanel
+                    workspace={activeWorkspace}
+                    initialFilePath={editorTargetFile}
+                    isBuilding={Boolean(isBuilding)}
+                    onSaveEnvVars={handleSaveEnvVars}
+                    onTriggerBuild={() => void handleTriggerBuild(false)}
+                  />
+                )}
+
+                {activeTab === 'build' && (
+                  <BuildConsolePanel
+                    workspace={activeWorkspace}
+                    logs={logs}
+                    apiLogs={apiLogs}
+                    buildOptions={buildOptions}
+                    onChangeBuildOptions={setBuildOptions}
+                    onTriggerBuild={() => void handleTriggerBuild(false)}
+                    onOpenPreview={() => setActiveTab('preview')}
+                    onMountFullApp={() => setFullScreenApp(true)}
+                    onRefreshWorkspace={async () => {
+                      await loadWorkspaceDetail(activeWorkspace.id);
+                      await refreshWorkspacesList();
+                    }}
+                  />
+                )}
+
+                {activeTab === 'preview' && (
+                  <LivePreviewPanel
+                    workspace={activeWorkspace}
+                    isBuilding={Boolean(isBuilding)}
+                    runtimeEvents={runtimeEvents}
+                    onClearRuntimeEvents={() => setRuntimeEvents([])}
+                    onTriggerBuild={() => void handleTriggerBuild(false)}
+                    onMountFullApp={() => setFullScreenApp(true)}
+                  />
+                )}
+              </>
             )}
           </>
         )}
       </main>
 
-      <footer className="border-t border-slate-800/80 px-6 py-4 text-xs text-slate-500">
-        <div className="max-w-[1440px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
-          <span>RepoForge Studio · GitHub Repository Inspector, Compiler &amp; Diff Runner</span>
-          <span>OAuth Private Clone · Branch Diff · API Subprocess Proxy · Smoke Prober</span>
+      {/* Global Site Footer with Direct Route Links */}
+      <footer className="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0B0F17] px-6 py-6 text-xs text-slate-500 dark:text-slate-400">
+        <div className="max-w-[1440px] mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <BrandLogo
+              size="sm"
+              onClick={(e) => {
+                e.preventDefault();
+                navigateTo('/', 'overview');
+              }}
+            />
+            <span className="hidden sm:inline text-slate-300 dark:text-slate-700">·</span>
+            <span className="hidden sm:inline">
+              GitHub Repository Inspector, Compiler &amp; Branch Diff Runner
+            </span>
+          </div>
+
+          <nav className="flex flex-wrap items-center justify-center gap-5 font-semibold">
+            <a
+              href="/upgrades"
+              onClick={(e) => {
+                e.preventDefault();
+                navigateTo('/upgrades');
+              }}
+              className="text-orange-600 dark:text-orange-400 hover:underline whitespace-nowrap"
+            >
+              Suggested Upgrades &amp; Add-Ons
+            </a>
+            <a
+              href="/support"
+              onClick={(e) => {
+                e.preventDefault();
+                navigateTo('/support');
+              }}
+              className="hover:text-slate-900 dark:hover:text-white transition-colors whitespace-nowrap"
+            >
+              Support
+            </a>
+            <a
+              href="/privacy"
+              onClick={(e) => {
+                e.preventDefault();
+                navigateTo('/privacy');
+              }}
+              className="hover:text-slate-900 dark:hover:text-white transition-colors whitespace-nowrap"
+            >
+              Privacy
+            </a>
+            <a
+              href="/contact"
+              onClick={(e) => {
+                e.preventDefault();
+                navigateTo('/contact');
+              }}
+              className="hover:text-slate-900 dark:hover:text-white transition-colors whitespace-nowrap"
+            >
+              Contact
+            </a>
+            <a
+              href="/T&C"
+              onClick={(e) => {
+                e.preventDefault();
+                navigateTo('/T&C');
+              }}
+              className="hover:text-slate-900 dark:hover:text-white transition-colors whitespace-nowrap"
+            >
+              T&amp;C
+            </a>
+          </nav>
         </div>
       </footer>
     </div>

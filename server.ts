@@ -13,6 +13,7 @@ import dotenv from 'dotenv';
 import type {
   ApiServerState,
   BuildArtifact,
+  ContactTicket,
   DatabaseSchemaSummary,
   DependencyItem,
   DetectedSchemaField,
@@ -29,6 +30,8 @@ import type {
   SmokeProbeCheck,
   SmokeProbeReport,
   SubProjectInfo,
+  UpgradeCategory,
+  UpgradeItem,
   WorkspaceDetail,
   WorkspaceDiffReport,
   WorkspaceSummary,
@@ -58,6 +61,153 @@ const apiProcesses = new Map<string, ChildProcess>();
 const githubSessions = new Map<string, GitHubSession>();
 const pendingOAuthStates = new Map<string, { redirectUri: string; createdAt: number }>();
 let lastActivePreviewId: string | null = null;
+
+const UPGRADES_FILE = path.join(WORKSPACES_ROOT, 'suggested-upgrades.json');
+const CONTACT_FILE = path.join(WORKSPACES_ROOT, 'contact-tickets.json');
+
+const SEEDED_UPGRADES: UpgradeItem[] = [
+  {
+    id: 'gh-webhook-autorebuild',
+    title: 'GitHub Push & PR Webhook Auto-Builder',
+    category: 'Automation',
+    summary:
+      'Receive signed GitHub push and pull_request webhooks so imported workspaces automatically pull commits, re-run builds, and refresh Smoke Probe checks.',
+    scope: 'Express /api/webhooks/github + HMAC SHA-256 verification',
+    impact: 'High Impact',
+    votes: 42,
+    prompt:
+      'Add a /api/webhooks/github endpoint with X-Hub-Signature-256 verification that triggers git pull and automatic workspace rebuilds on push events.',
+  },
+  {
+    id: 'commit-and-open-pr',
+    title: 'Commit Edits & Open GitHub Pull Request from Studio',
+    category: 'Developer UX',
+    summary:
+      'Push live code and package.json fixes made inside RepoForge Studio directly to a new GitHub branch and open a Pull Request via OAuth.',
+    scope: 'Git branch/commit/push + GitHub Pulls REST API',
+    impact: 'High Impact',
+    votes: 38,
+    prompt:
+      'Add a Commit & Open PR modal in Code & Env that commits modified workspace files to a new branch and opens a Pull Request using the connected GitHub OAuth session.',
+  },
+  {
+    id: 'cloud-run-dockerfile-pack',
+    title: 'One-Click Cloud Run Dockerfile & Deploy Bundle',
+    category: 'Cloud & Data',
+    summary:
+      'Generate a production multi-stage Node 22 Dockerfile, .dockerignore, and Cloud Run deploy script tailored to the detected framework and build output.',
+    scope: 'Dockerfile generator + downloadable deploy bundle',
+    impact: 'Core Add-On',
+    votes: 31,
+    prompt:
+      'Add a Cloud Run Export generator that writes a multi-stage Node 22 Dockerfile and cloudbuild.yaml into the workspace based on its detected build output.',
+  },
+  {
+    id: 'visual-snapshot-diff',
+    title: 'Automated Headless Browser Visual Regression Diff',
+    category: 'Build & Runtime',
+    summary:
+      'Capture desktop and mobile screenshots of Base vs. Head branch builds and highlight layout shifts alongside bundle size deltas.',
+    scope: 'Branch Diff Runner + viewport screenshot comparison',
+    impact: 'High Impact',
+    votes: 29,
+    prompt:
+      'Enhance Branch Diff Runner with automated viewport rendering checks and DOM metric comparison between Base and Head previews.',
+  },
+  {
+    id: 'npm-security-license-audit',
+    title: 'Dependency Vulnerability & OSS License Scanner',
+    category: 'Build & Runtime',
+    summary:
+      'Run non-blocking npm audit and license classification during workspace inspection to flag CVEs, deprecated packages, and copyleft licenses.',
+    scope: 'Overview Panel + /api/workspaces/:id/audit endpoint',
+    impact: 'Quick Win',
+    votes: 24,
+    prompt:
+      'Add an npm audit and SPDX license scanner endpoint /api/workspaces/:id/audit and surface vulnerability counts in the Overview dependency table.',
+  },
+  {
+    id: 'live-collab-review-notes',
+    title: 'Pinpointed Preview Review Notes & Share Links',
+    category: 'Developer UX',
+    summary:
+      'Drop coordinate-pinned QA comments onto any route inside Live Preview and persist team review checklists to Firestore.',
+    scope: 'Live Preview overlay + Firestore review notes sync',
+    impact: 'Core Add-On',
+    votes: 21,
+    prompt:
+      'Add an interactive QA annotation layer on Live Preview that saves route-specific review notes to Firestore.',
+  },
+  {
+    id: 'openapi-swagger-explorer',
+    title: 'Auto-Discovered Express / OpenAPI Route Explorer',
+    category: 'Developer UX',
+    summary:
+      'Parse Express, Fastify, and Hono router files in the cloned repo to pre-populate all REST endpoints inside the Sandbox API Tester.',
+    scope: 'Static AST route scanner + Build & API HTTP client',
+    impact: 'Quick Win',
+    votes: 19,
+    prompt:
+      'Scan cloned backend files for app.get/post/put/delete route patterns and list clickable endpoint presets in the Sandbox API Subprocess tester.',
+  },
+  {
+    id: 'scheduled-nightly-smoke',
+    title: 'Scheduled Branch Health Matrix & Exportable Badge',
+    category: 'Automation',
+    summary:
+      'Generate embeddable SVG build-health badges for README files and run scheduled smoke probes across multiple release branches.',
+    scope: 'SVG badge endpoint /api/workspaces/:id/badge.svg',
+    impact: 'Quick Win',
+    votes: 16,
+    prompt:
+      'Create a dynamic SVG build & smoke-probe status badge endpoint /api/workspaces/:id/badge.svg with markdown copy snippets.',
+  },
+];
+
+function loadUpgradesStore(): UpgradeItem[] {
+  ensureWorkspacesRoot();
+  try {
+    if (fs.existsSync(UPGRADES_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(UPGRADES_FILE, 'utf-8')) as UpgradeItem[];
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch {
+    // Fallback to seed
+  }
+  fs.writeFileSync(UPGRADES_FILE, JSON.stringify(SEEDED_UPGRADES, null, 2), 'utf-8');
+  return [...SEEDED_UPGRADES];
+}
+
+function saveUpgradesStore(items: UpgradeItem[]) {
+  ensureWorkspacesRoot();
+  try {
+    fs.writeFileSync(UPGRADES_FILE, JSON.stringify(items, null, 2), 'utf-8');
+  } catch {
+    // Ignore transient /tmp write issues
+  }
+}
+
+function loadContactStore(): ContactTicket[] {
+  ensureWorkspacesRoot();
+  try {
+    if (fs.existsSync(CONTACT_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(CONTACT_FILE, 'utf-8')) as ContactTicket[];
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {
+    // Ignore
+  }
+  return [];
+}
+
+function saveContactStore(tickets: ContactTicket[]) {
+  ensureWorkspacesRoot();
+  try {
+    fs.writeFileSync(CONTACT_FILE, JSON.stringify(tickets, null, 2), 'utf-8');
+  } catch {
+    // Ignore
+  }
+}
 
 function ensureWorkspacesRoot() {
   fs.mkdirSync(WORKSPACES_ROOT, { recursive: true });
@@ -2727,6 +2877,112 @@ async function startServer() {
     sseClients.delete(id);
     await fsp.rm(ws.rootDir, { recursive: true, force: true });
     res.json({ deleted: true });
+  });
+
+  app.delete('/api/workspaces', async (_req: Request, res: Response) => {
+    const count = workspaces.size;
+    for (const [id, ws] of workspaces.entries()) {
+      stopWorkspaceApiServer(id);
+      sseClients.delete(id);
+      await fsp.rm(ws.rootDir, { recursive: true, force: true }).catch(() => {});
+    }
+    workspaces.clear();
+    lastActivePreviewId = null;
+    res.json({ purgedCount: count });
+  });
+
+  // Suggested Upgrades, Updates & Add-Ons Endpoints
+  app.get('/api/upgrades', (_req: Request, res: Response) => {
+    const items = loadUpgradesStore().sort((a, b) => b.votes - a.votes);
+    res.json({ upgrades: items });
+  });
+
+  app.post('/api/upgrades', (req: Request, res: Response) => {
+    const { title, category, summary, scope } = (req.body || {}) as {
+      title?: string;
+      category?: UpgradeCategory;
+      summary?: string;
+      scope?: string;
+    };
+    if (!title?.trim() || !summary?.trim()) {
+      res.status(400).json({ error: 'Upgrade title and summary are required.' });
+      return;
+    }
+    const allowedCategories: UpgradeCategory[] = [
+      'Build & Runtime',
+      'Cloud & Data',
+      'Developer UX',
+      'Automation',
+    ];
+    const safeCategory: UpgradeCategory =
+      category && allowedCategories.includes(category) ? category : 'Developer UX';
+
+    const items = loadUpgradesStore();
+    const newItem: UpgradeItem = {
+      id: `custom-${crypto.randomBytes(3).toString('hex')}`,
+      title: title.trim().slice(0, 110),
+      category: safeCategory,
+      summary: summary.trim().slice(0, 400),
+      scope: (scope?.trim() || 'Custom Studio Add-On').slice(0, 100),
+      impact: 'Core Add-On',
+      votes: 1,
+      prompt: `Implement "${title.trim()}" (${safeCategory}): ${summary.trim()}`,
+      isCustom: true,
+      createdAt: new Date().toISOString(),
+    };
+    items.unshift(newItem);
+    saveUpgradesStore(items);
+    res.status(201).json({ upgrade: newItem, upgrades: items.sort((a, b) => b.votes - a.votes) });
+  });
+
+  app.post('/api/upgrades/:id/vote', (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const { delta = 1 } = (req.body || {}) as { delta?: number };
+    const step = delta === -1 ? -1 : 1;
+    const items = loadUpgradesStore();
+    const target = items.find((u) => u.id === id);
+    if (!target) {
+      res.status(404).json({ error: 'Upgrade item not found.' });
+      return;
+    }
+    target.votes = Math.max(0, target.votes + step);
+    saveUpgradesStore(items);
+    res.json({ upgrade: target, upgrades: items.sort((a, b) => b.votes - a.votes) });
+  });
+
+  // Contact & Support Ticket Endpoints
+  app.get('/api/contact', (_req: Request, res: Response) => {
+    const tickets = loadContactStore();
+    res.json({ tickets: tickets.slice(0, 20) });
+  });
+
+  app.post('/api/contact', (req: Request, res: Response) => {
+    const { name, email, category, workspaceId, message } = (req.body || {}) as {
+      name?: string;
+      email?: string;
+      category?: string;
+      workspaceId?: string;
+      message?: string;
+    };
+    if (!name?.trim() || !email?.trim() || !message?.trim()) {
+      res.status(400).json({ error: 'Name, email, and message are required.' });
+      return;
+    }
+    const tickets = loadContactStore();
+    const ticketNumber = 1001 + tickets.length;
+    const ticket: ContactTicket = {
+      id: `RF-${ticketNumber}`,
+      name: name.trim().slice(0, 80),
+      email: email.trim().slice(0, 120),
+      category: (category?.trim() || 'General Inquiry').slice(0, 60),
+      workspaceId: workspaceId?.trim() || undefined,
+      message: message.trim().slice(0, 1500),
+      status: 'received',
+      createdAt: new Date().toISOString(),
+    };
+    tickets.unshift(ticket);
+    saveContactStore(tickets);
+    res.status(201).json({ ticket, tickets: tickets.slice(0, 20) });
   });
 
   // Live Built App Preview Static & SPA Router

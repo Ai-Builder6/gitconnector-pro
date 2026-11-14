@@ -233,3 +233,34 @@ export interface WorkspaceDiffReport {
   unchangedCount: number;
   changes: DiffFileChange[];
 }
+
+export type UpgradeCategory =
+  | 'Build & Runtime'
+  | 'Cloud & Data'
+  | 'Developer UX'
+  | 'Automation';
+
+export interface UpgradeItem {
+  id: string;
+  title: string;
+  category: UpgradeCategory;
+  summary: string;
+  scope: string;
+  impact: 'High Impact' | 'Core Add-On' | 'Quick Win';
+  votes: number;
+  prompt: string;
+  isCustom?: boolean;
+  createdAt?: string;
+}
+
+export interface ContactTicket {
+  id: string;
+  name: string;
+  email: string;
+  category: string;
+  workspaceId?: string;
+  message: string;
+  status: 'received' | 'queued';
+  createdAt: string;
+}
+

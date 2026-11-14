@@ -42,13 +42,11 @@ export const BuildConsolePanel: React.FC<BuildConsolePanelProps> = ({
   const logContainerRef = useRef<HTMLDivElement | null>(null);
   const apiLogRef = useRef<HTMLDivElement | null>(null);
 
-  // Backend API Subprocess State
   const [entryOverride, setEntryOverride] = useState(
     workspace.apiServer.detectedEntry || 'server.js'
   );
   const [togglingApi, setTogglingApi] = useState(false);
 
-  // Sandbox API HTTP Tester State
   const [reqMethod, setReqMethod] = useState<'GET' | 'POST' | 'PUT' | 'DELETE'>('GET');
   const [reqPath, setReqPath] = useState('/');
   const [reqBody, setReqBody] = useState('{\n  "ping": true\n}');
@@ -145,53 +143,59 @@ export const BuildConsolePanel: React.FC<BuildConsolePanelProps> = ({
   return (
     <div className="space-y-8">
       {/* Build Controls Header */}
-      <div className="border border-slate-800 bg-[#111827] rounded-xl p-5 flex flex-col xl:flex-row xl:items-center justify-between gap-5">
+      <div className="border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] rounded-2xl p-5 flex flex-col xl:flex-row xl:items-center justify-between gap-5 shadow-2xs">
         <div className="space-y-1">
           <div className="flex items-center gap-2 text-xs">
-            <span className={`font-medium ${statusInfo.colorClass}`}>{statusInfo.label}</span>
-            <span aria-hidden="true" className="text-slate-600">·</span>
-            <span className="text-slate-400 font-mono">
+            <span className={statusInfo.colorClass}>{statusInfo.label}</span>
+            <span aria-hidden="true" className="text-slate-300 dark:text-slate-600">
+              ·
+            </span>
+            <span className="text-slate-600 dark:text-slate-400 font-mono">
               {workspace.owner}/{workspace.repoName}
               {workspace.targetSubPath ? `/${workspace.targetSubPath}` : ''}
             </span>
             {workspace.buildDurationMs !== undefined && (
               <>
-                <span aria-hidden="true" className="text-slate-600">·</span>
-                <span className="font-mono tabular-nums text-slate-400">
+                <span aria-hidden="true" className="text-slate-300 dark:text-slate-600">
+                  ·
+                </span>
+                <span className="font-mono tabular-nums text-slate-500 dark:text-slate-400">
                   {formatDuration(workspace.buildDurationMs)}
                 </span>
               </>
             )}
           </div>
-          <h2 className="text-base font-semibold text-white">
+          <h2 className="text-base font-bold text-slate-900 dark:text-white">
             Full Project Build Pipeline &amp; Sandbox API Runner
           </h2>
           {workspace.errorMessage && (
-            <p className="text-xs text-rose-400 pt-1">{workspace.errorMessage}</p>
+            <p className="text-xs text-rose-600 dark:text-rose-400 pt-1">
+              {workspace.errorMessage}
+            </p>
           )}
         </div>
 
         <div className="flex flex-wrap items-center gap-4">
-          <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer select-none">
+          <label className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer select-none">
             <input
               type="checkbox"
               checked={buildOptions.autoNormalize}
               onChange={(e) =>
                 onChangeBuildOptions({ ...buildOptions, autoNormalize: e.target.checked })
               }
-              className="rounded border-slate-700 bg-slate-900 text-blue-600"
+              className="rounded border-slate-300 dark:border-slate-700 accent-orange-500"
             />
             <span>Auto-normalize lockfiles &amp; base paths</span>
           </label>
 
-          <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer select-none">
+          <label className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer select-none">
             <input
               type="checkbox"
               checked={buildOptions.cleanInstall}
               onChange={(e) =>
                 onChangeBuildOptions({ ...buildOptions, cleanInstall: e.target.checked })
               }
-              className="rounded border-slate-700 bg-slate-900 text-blue-600"
+              className="rounded border-slate-300 dark:border-slate-700 accent-orange-500"
             />
             <span>Clean install</span>
           </label>
@@ -201,7 +205,7 @@ export const BuildConsolePanel: React.FC<BuildConsolePanelProps> = ({
               type="button"
               disabled={isBuilding}
               onClick={onTriggerBuild}
-              className="h-10 px-4 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="h-10 px-4 rounded-lg bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               {isBuilding ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -224,17 +228,17 @@ export const BuildConsolePanel: React.FC<BuildConsolePanelProps> = ({
                 <button
                   type="button"
                   onClick={onOpenPreview}
-                  className="h-10 px-3.5 rounded-lg border border-emerald-600/50 bg-emerald-950/50 hover:bg-emerald-900/50 text-emerald-200 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  className="h-10 px-3.5 rounded-lg border border-emerald-300 dark:border-emerald-600/50 bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 text-emerald-800 dark:text-emerald-200 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
-                  <Play className="w-3.5 h-3.5" />
+                  <Play className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                   <span>Open Preview</span>
                 </button>
                 <button
                   type="button"
                   onClick={onMountFullApp}
-                  className="h-10 px-3.5 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-medium inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  className="h-10 px-3.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
-                  <Play className="w-3.5 h-3.5" />
+                  <Play className="w-3.5 h-3.5 text-cyan-600" />
                   <span>Full-Screen App</span>
                 </button>
               </>
@@ -244,13 +248,15 @@ export const BuildConsolePanel: React.FC<BuildConsolePanelProps> = ({
       </div>
 
       {/* Streaming Build Terminal */}
-      <div className="border border-slate-800 bg-[#111827] rounded-xl overflow-hidden">
-        <div className="px-5 py-3 border-b border-slate-800 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-xs text-slate-300 font-medium">
-            {isBuilding && <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />}
+      <div className="border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] rounded-2xl overflow-hidden shadow-2xs">
+        <div className="px-5 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+          <div className="flex items-center gap-2 text-xs text-slate-800 dark:text-slate-300 font-semibold">
+            {isBuilding && <Loader2 className="w-3.5 h-3.5 animate-spin text-orange-500" />}
             <span>Build Output Stream</span>
-            <span className="text-slate-500">·</span>
-            <span className="font-mono tabular-nums text-slate-400">{logs.length} lines</span>
+            <span className="text-slate-300 dark:text-slate-500">·</span>
+            <span className="font-mono tabular-nums text-slate-500 dark:text-slate-400">
+              {logs.length} lines
+            </span>
           </div>
           <button
             type="button"
@@ -259,19 +265,23 @@ export const BuildConsolePanel: React.FC<BuildConsolePanelProps> = ({
               setCopiedLogs(true);
               setTimeout(() => setCopiedLogs(false), 1500);
             }}
-            className="h-7 px-2.5 rounded-md border border-slate-700 bg-slate-800/70 hover:bg-slate-800 text-xs text-slate-300 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+            className="h-7 px-2.5 rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-medium text-slate-700 dark:text-slate-300 inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
           >
-            {copiedLogs ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+            {copiedLogs ? (
+              <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            ) : (
+              <Copy className="w-3.5 h-3.5" />
+            )}
             <span>{copiedLogs ? 'Copied' : 'Copy Log'}</span>
           </button>
         </div>
 
         <div
           ref={logContainerRef}
-          className="p-5 bg-[#090D14] font-mono text-xs leading-relaxed h-[320px] overflow-y-auto space-y-1"
+          className="p-5 bg-[#0F172A] font-mono text-xs leading-relaxed h-[320px] overflow-y-auto space-y-1"
         >
           {logs.length === 0 ? (
-            <div className="text-slate-500">
+            <div className="text-slate-400">
               No build logs recorded yet. Click Build Project above to install dependencies and compile the repository.
             </div>
           ) : (
@@ -289,7 +299,7 @@ export const BuildConsolePanel: React.FC<BuildConsolePanelProps> = ({
                       ? 'text-amber-300 break-words'
                       : isSuccess
                       ? 'text-emerald-400 break-words'
-                      : 'text-slate-300 break-words'
+                      : 'text-slate-200 break-words'
                   }
                 >
                   {line}
@@ -300,37 +310,37 @@ export const BuildConsolePanel: React.FC<BuildConsolePanelProps> = ({
         </div>
       </div>
 
-      {/* SUGGESTION 4: Backend API Subprocess Runner & Reverse Proxy Tester */}
-      <div className="border border-slate-800 bg-[#111827] rounded-xl overflow-hidden">
-        <div className="px-5 py-4 border-b border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+      {/* Backend API Subprocess Runner & Reverse Proxy Tester */}
+      <div className="border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] rounded-2xl overflow-hidden shadow-2xs">
+        <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="space-y-0.5">
-            <div className="flex items-center gap-2 text-xs">
-              <Server className="w-3.5 h-3.5 text-blue-400" />
-              <span className="font-semibold text-slate-100">
+            <div className="flex items-center gap-2 text-xs flex-wrap">
+              <Server className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400" />
+              <span className="font-bold text-slate-900 dark:text-slate-100">
                 Backend API Subprocess Proxy
               </span>
-              <span className="text-slate-600">·</span>
+              <span className="text-slate-300 dark:text-slate-600">·</span>
               <span
                 className={
                   workspace.apiServer.status === 'running'
-                    ? 'text-emerald-400 font-medium'
+                    ? 'text-emerald-600 dark:text-emerald-400 font-semibold'
                     : workspace.apiServer.status === 'error'
-                    ? 'text-rose-400'
-                    : 'text-slate-400'
+                    ? 'text-rose-600 dark:text-rose-400 font-semibold'
+                    : 'text-slate-500 dark:text-slate-400'
                 }
               >
                 Status: {workspace.apiServer.status}
               </span>
               {workspace.apiServer.port && (
                 <>
-                  <span className="text-slate-600">·</span>
-                  <span className="font-mono tabular-nums text-slate-400">
+                  <span className="text-slate-300 dark:text-slate-600">·</span>
+                  <span className="font-mono tabular-nums text-slate-600 dark:text-slate-400">
                     127.0.0.1:{workspace.apiServer.port} → /sandbox-api/{workspace.id}/*
                   </span>
                 </>
               )}
             </div>
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-slate-600 dark:text-slate-400">
               Spawn Express, Fastify, Hono, or custom Node API entrypoints on an isolated localhost port and send live requests through <code>/sandbox-api/{workspace.id}/*</code>.
             </p>
           </div>
@@ -342,7 +352,7 @@ export const BuildConsolePanel: React.FC<BuildConsolePanelProps> = ({
               onChange={(e) => setEntryOverride(e.target.value)}
               disabled={workspace.apiServer.status === 'running' || togglingApi}
               placeholder="Entry file (e.g. server.ts)"
-              className="w-48 h-9 px-3 rounded-lg bg-[#0B0F17] border border-slate-700 font-mono text-xs text-slate-200 focus:outline-none focus:border-blue-500 disabled:opacity-50"
+              className="w-48 h-9 px-3 rounded-lg bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-700 font-mono text-xs text-slate-900 dark:text-slate-200 focus:outline-none focus:border-orange-500 disabled:opacity-50"
             />
 
             {workspace.apiServer.status === 'running' ? (
@@ -350,7 +360,7 @@ export const BuildConsolePanel: React.FC<BuildConsolePanelProps> = ({
                 type="button"
                 disabled={togglingApi}
                 onClick={() => void handleStopApiServer()}
-                className="h-9 px-3.5 rounded-lg border border-rose-500/40 bg-rose-950/40 hover:bg-rose-900/50 text-rose-200 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                className="h-9 px-3.5 rounded-lg border border-rose-300 dark:border-rose-500/40 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/50 text-rose-800 dark:text-rose-200 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
               >
                 <Square className="w-3.5 h-3.5" />
                 <span>Stop Subprocess</span>
@@ -360,12 +370,12 @@ export const BuildConsolePanel: React.FC<BuildConsolePanelProps> = ({
                 type="button"
                 disabled={togglingApi}
                 onClick={() => void handleStartApiServer()}
-                className="h-9 px-3.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                className="h-9 px-3.5 rounded-lg bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
               >
                 {togglingApi ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
                 ) : (
-                  <Play className="w-3.5 h-3.5 text-emerald-400" />
+                  <Play className="w-3.5 h-3.5" />
                 )}
                 <span>Start API Subprocess</span>
               </button>
@@ -373,18 +383,18 @@ export const BuildConsolePanel: React.FC<BuildConsolePanelProps> = ({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-slate-800">
+        <div className="grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-slate-200 dark:divide-slate-800">
           {/* Subprocess Logs */}
-          <div className="lg:col-span-6 p-4 bg-[#090D14] flex flex-col h-64">
+          <div className="lg:col-span-6 p-4 bg-[#0F172A] flex flex-col h-64">
             <div className="text-xs text-slate-400 mb-2 font-medium">
               Subprocess Console Output
             </div>
             <div
               ref={apiLogRef}
-              className="flex-1 overflow-y-auto font-mono text-xs text-slate-300 space-y-1"
+              className="flex-1 overflow-y-auto font-mono text-xs text-slate-200 space-y-1"
             >
               {apiLogs.length === 0 ? (
-                <span className="text-slate-600">
+                <span className="text-slate-400">
                   {workspace.apiServer.capable
                     ? `Detected entrypoint "${workspace.apiServer.detectedEntry || 'npm start'}". Click Start API Subprocess to launch.`
                     : 'No default backend server entrypoint detected — specify any .js/.ts file above (or create one in Code & Env) to launch.'}
@@ -396,12 +406,12 @@ export const BuildConsolePanel: React.FC<BuildConsolePanelProps> = ({
           </div>
 
           {/* Interactive HTTP Request Client */}
-          <div className="lg:col-span-6 p-4 space-y-3">
+          <div className="lg:col-span-6 p-4 space-y-3 bg-white dark:bg-[#111827]">
             <form onSubmit={(e) => void handleSendTestRequest(e)} className="flex items-center gap-2">
               <select
                 value={reqMethod}
                 onChange={(e) => setReqMethod(e.target.value as 'GET' | 'POST' | 'PUT' | 'DELETE')}
-                className="h-8 px-2 rounded-md bg-[#0B0F17] border border-slate-700 text-xs font-mono text-slate-200"
+                className="h-8 px-2 rounded-md bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-700 text-xs font-mono text-slate-900 dark:text-slate-200"
               >
                 <option value="GET">GET</option>
                 <option value="POST">POST</option>
@@ -413,12 +423,12 @@ export const BuildConsolePanel: React.FC<BuildConsolePanelProps> = ({
                 value={reqPath}
                 onChange={(e) => setReqPath(e.target.value)}
                 placeholder="/api/health"
-                className="flex-1 h-8 px-3 rounded-md bg-[#0B0F17] border border-slate-700 font-mono text-xs text-slate-200 focus:outline-none focus:border-blue-500"
+                className="flex-1 h-8 px-3 rounded-md bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-700 font-mono text-xs text-slate-900 dark:text-slate-200 focus:outline-none focus:border-orange-500"
               />
               <button
                 type="submit"
                 disabled={sendingReq || workspace.apiServer.status !== 'running'}
-                className="h-8 px-3 rounded-md bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-xs font-semibold text-white inline-flex items-center gap-1.5 cursor-pointer shrink-0"
+                className="h-8 px-3 rounded-md bg-orange-500 hover:bg-orange-600 disabled:opacity-40 text-xs font-semibold text-white inline-flex items-center gap-1.5 cursor-pointer shrink-0"
               >
                 <Send className="w-3 h-3" />
                 <span>Send</span>
@@ -430,21 +440,21 @@ export const BuildConsolePanel: React.FC<BuildConsolePanelProps> = ({
                 value={reqBody}
                 onChange={(e) => setReqBody(e.target.value)}
                 rows={2}
-                className="w-full p-2 rounded-md bg-[#0B0F17] border border-slate-800 font-mono text-xs text-slate-300 focus:outline-none"
+                className="w-full p-2 rounded-md bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 font-mono text-xs text-slate-800 dark:text-slate-300 focus:outline-none"
               />
             )}
 
-            <div className="p-3 rounded-lg bg-[#090D14] border border-slate-800/80 h-36 overflow-y-auto font-mono text-xs">
+            <div className="p-3 rounded-lg bg-slate-900 border border-slate-800 h-36 overflow-y-auto font-mono text-xs">
               {!apiResponse ? (
-                <span className="text-slate-600">
+                <span className="text-slate-400">
                   Response payload from /sandbox-api/{workspace.id}{reqPath} will render here.
                 </span>
               ) : (
                 <div className="space-y-1.5">
-                  <div className="text-slate-400 tabular-nums">
+                  <div className="text-cyan-400 tabular-nums">
                     HTTP {apiResponse.status} · {apiResponse.durationMs} ms
                   </div>
-                  <pre className="text-slate-200 whitespace-pre-wrap">{apiResponse.body}</pre>
+                  <pre className="text-slate-100 whitespace-pre-wrap">{apiResponse.body}</pre>
                 </div>
               )}
             </div>
@@ -454,40 +464,44 @@ export const BuildConsolePanel: React.FC<BuildConsolePanelProps> = ({
 
       {/* Compiled Bundle Artifacts Breakdown */}
       {workspace.artifacts.length > 0 && (
-        <div className="border border-slate-800 bg-[#111827] rounded-xl overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] rounded-2xl overflow-hidden shadow-2xs">
+          <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <h3 className="text-sm font-semibold text-slate-100">
+              <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
                 Compiled Output Artifacts ({workspace.outputDirRelative})
               </h3>
-              <p className="text-xs text-slate-400 mt-0.5 font-mono tabular-nums">
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-mono tabular-nums">
                 {workspace.artifacts.length} files · Total bundle footprint: {formatBytes(totalArtifactBytes)}
               </p>
             </div>
             <a
               href={`/api/workspaces/${workspace.id}/download?mode=dist`}
-              className="h-9 px-3.5 rounded-lg border border-slate-700 bg-slate-800/70 hover:bg-slate-800 text-xs font-medium text-slate-200 inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+              className="h-9 px-3.5 rounded-lg border border-cyan-300 dark:border-slate-700 bg-cyan-50/70 dark:bg-slate-800/70 hover:bg-cyan-100 dark:hover:bg-slate-800 text-xs font-semibold text-cyan-900 dark:text-slate-200 inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
             >
-              <Download className="w-3.5 h-3.5" />
+              <Download className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400" />
               <span>Download Production Bundle (.tar.gz)</span>
             </a>
           </div>
 
           <div className="max-h-72 overflow-y-auto">
             <table className="w-full text-left border-collapse text-xs">
-              <thead className="bg-[#0B0F17] text-slate-400 border-b border-slate-800 sticky top-0">
+              <thead className="bg-slate-50 dark:bg-[#0B0F17] text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800 sticky top-0">
                 <tr>
-                  <th className="py-2.5 px-5 font-medium">Artifact Path</th>
-                  <th className="py-2.5 px-4 font-medium">Type</th>
-                  <th className="py-2.5 px-5 font-medium text-right">Size</th>
+                  <th className="py-2.5 px-5 font-semibold">Artifact Path</th>
+                  <th className="py-2.5 px-4 font-semibold">Type</th>
+                  <th className="py-2.5 px-5 font-semibold text-right">Size</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/80">
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
                 {workspace.artifacts.map((art) => (
-                  <tr key={art.path} className="hover:bg-slate-800/30">
-                    <td className="py-2.5 px-5 font-mono text-slate-200">{art.path}</td>
-                    <td className="py-2.5 px-4 text-slate-400">{art.category}</td>
-                    <td className="py-2.5 px-5 text-right font-mono tabular-nums text-slate-300">
+                  <tr key={art.path} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                    <td className="py-2.5 px-5 font-mono text-slate-900 dark:text-slate-200">
+                      {art.path}
+                    </td>
+                    <td className="py-2.5 px-4 text-slate-500 dark:text-slate-400">
+                      {art.category}
+                    </td>
+                    <td className="py-2.5 px-5 text-right font-mono tabular-nums text-cyan-700 dark:text-slate-300">
                       {formatBytes(art.size)}
                     </td>
                   </tr>
